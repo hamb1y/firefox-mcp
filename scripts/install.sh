@@ -5,20 +5,27 @@
 set -eu
 BASE="${FIREFOX_MCP_BASE:-https://github.com/hamb1y/firefox-mcp/releases/latest/download}"
 
-# Inside WSL, Firefox is the Windows one: the helper has to be installed on Windows.
+# Inside WSL, Firefox is the Windows one: install the Windows helper from here.
 if [ -z "${FIREFOX_MCP_FORCE:-}" ] && grep -qi microsoft /proc/version 2>/dev/null; then
-  echo "This is WSL. Your Firefox runs on Windows, so install the helper there:" >&2
-  echo "  open PowerShell (Start menu > type PowerShell > Enter) and paste:" >&2
-  echo "  irm $BASE/install.ps1 | iex" >&2
-  echo "Then, in the add-on settings, turn on \"Allow harnesses inside WSL to connect\"." >&2
-  echo "(Running Firefox inside WSL itself? Re-run with FIREFOX_MCP_FORCE=1.)" >&2
+  ps=$(command -v powershell.exe 2>/dev/null || echo /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe)
+  if [ -x "$ps" ]; then
+    echo "WSL detected: installing the helper for Windows Firefox."
+    # cd to a Windows path so PowerShell doesn't start in an unsupported \\wsl$ directory.
+    (cd /mnt/c 2>/dev/null || true; "$ps" -NoProfile -ExecutionPolicy Bypass -Command "irm $BASE/install.ps1 | iex")
+    echo
+    echo "For a harness inside WSL: add-on Settings > tick \"Allow harnesses inside WSL to connect\","
+    echo "then Format > \"Claude Code inside WSL\". (Firefox inside WSL itself? Re-run with FIREFOX_MCP_FORCE=1.)"
+    exit 0
+  fi
+  echo "This is WSL, but Windows PowerShell isn't reachable. In Windows, open PowerShell or Command Prompt and paste:" >&2
+  echo "  powershell -ExecutionPolicy Bypass -c \"irm $BASE/install.ps1 | iex\"" >&2
   exit 1
 fi
 
 case "$(uname -s)" in
   Darwin) os=darwin ;;
   Linux) os=linux ;;
-  *) echo "Unsupported system: $(uname -s). On Windows run in PowerShell: irm $BASE/install.ps1 | iex" >&2; exit 1 ;;
+  *) echo "Unsupported system: $(uname -s). On Windows run: powershell -ExecutionPolicy Bypass -c \"irm $BASE/install.ps1 | iex\"" >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
   x86_64 | amd64) arch=x64 ;;

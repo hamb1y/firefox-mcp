@@ -6,7 +6,7 @@ Firefox starts the helper itself; the helper serves MCP on
 
 ## 1. Install the helper (once per computer)
 
-- **Windows:** in PowerShell: `irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex`
+- **Windows:** in PowerShell or Command Prompt: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex"`
 - **macOS / Linux:** in Terminal: `curl -fsSL https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.sh | sh`
 
 The toolbar popup shows the exact file and command for your system when the

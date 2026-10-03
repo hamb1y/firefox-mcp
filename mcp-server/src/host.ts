@@ -35,6 +35,8 @@ import { DEFAULT_BIND, DEFAULT_PORT } from "./config.js";
 import { McpHttp, SERVER_VERSION } from "./http.js";
 
 const EXTENSION_ID = "firefox-mcp@hamb1y.github.io";
+/** IDs of older add-on builds, still allowed so an un-updated add-on gets "update me" instead of "not installed". */
+const LEGACY_EXTENSION_IDS = ["firefox-mcp-bridge@example.com"];
 const MAX_OUT = 1024 * 1024; // Firefox rejects host->extension messages over 1 MB
 
 // ===================================================================== host
@@ -261,7 +263,7 @@ function hostManifest(exe: string, extensionId: string): string {
       description: "Firefox MCP Bridge host: serves MCP to your local AI tools",
       path: exe,
       type: "stdio",
-      allowed_extensions: [extensionId],
+      allowed_extensions: [extensionId, ...LEGACY_EXTENSION_IDS.filter((id) => id !== extensionId)],
     },
     null,
     2,

@@ -43,13 +43,13 @@ add-on to talk to a local program — no manual server, no extra login.
 
 The add-on's popup shows this for your system with a **Copy command** button.
 
-**Windows** — open PowerShell and paste:
+**Windows** — open PowerShell or Command Prompt and paste:
 
-```powershell
-irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex
+```bat
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex"
 ```
 
-**macOS / Linux** — open Terminal and paste:
+**macOS / Linux / WSL** — open Terminal and paste (inside WSL it installs the Windows helper for you):
 
 ```sh
 curl -fsSL https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.sh | sh

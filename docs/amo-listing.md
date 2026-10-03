@@ -60,7 +60,7 @@ Helper source: https://github.com/hamb1y/firefox-mcp/tree/main/mcp-server (TypeS
 To test:
 1. Install the add-on, then install the helper:
    Linux/macOS: curl -fsSL https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.sh | sh
-   Windows (PowerShell): irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex
+   Windows (PowerShell or cmd): powershell -ExecutionPolicy Bypass -c "irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex"
 2. Click the toolbar icon. The dot turns green, then click "Copy MCP config" (contains URL + token).
 3. From a terminal (replace TOKEN):
    curl -s http://127.0.0.1:8901/mcp -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tabs_list","arguments":{"thought":"Listing tabs"}}}'

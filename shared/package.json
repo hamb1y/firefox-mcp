@@ -1,6 +1,6 @@
 {
   "name": "@firefox-mcp/shared",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "main": "dist/protocol.js",
   "types": "dist/protocol.d.ts",

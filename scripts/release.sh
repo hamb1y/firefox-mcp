@@ -20,9 +20,9 @@ cp firefox-mcp-bridge.zip "$OUT/"
 NOTES="$(cat <<MD
 Helper app for the **Firefox MCP Bridge** add-on.
 
-**Windows** — open PowerShell and paste:
-\`\`\`powershell
-irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex
+**Windows** — open PowerShell or Command Prompt and paste:
+\`\`\`bat
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex"
 \`\`\`
 
 **macOS / Linux** — open Terminal and paste:

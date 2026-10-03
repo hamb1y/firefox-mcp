@@ -13,8 +13,8 @@ function hostSetup(platform) {
   if (os === 'win') {
     return {
       os: 'Windows',
-      open: 'Open PowerShell (Start menu → type “powershell” → Enter) and paste:',
-      cmd: 'irm ' + DOWNLOAD + 'install.ps1 | iex',
+      open: 'Open PowerShell or Command Prompt (Start menu → type “powershell” → Enter) and paste:',
+      cmd: 'powershell -ExecutionPolicy Bypass -c "irm ' + DOWNLOAD + 'install.ps1 | iex"',
       file: BIN + '-windows-' + a + '.exe',
       manual: 'or download the app and double-click it (SmartScreen: More info → Run anyway)'
     };
