@@ -22,7 +22,7 @@ import {
   type BridgeEventType,
   type BridgeMethod,
   type HelloMessage,
-} from "@firefox-mcp/shared";
+} from "@webmcp-controller/shared";
 import { currentThought } from "./thought.js";
 
 export interface ExtensionInfo {

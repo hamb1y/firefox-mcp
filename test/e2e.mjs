@@ -2,7 +2,7 @@
 // `browser`, whose connectNative() spawns the REAL native helper; then drives
 // MCP over HTTP like a harness would.
 //   node test/e2e.mjs                       (helper = node mcp-server/dist/host.js)
-//   node test/e2e.mjs path/to/firefox-mcp-host   (test a compiled helper)
+//   node test/e2e.mjs path/to/webmcp-host   (test a compiled helper)
 //   MISSING=1 node test/e2e.mjs             (helper-not-installed flow)
 import { spawn } from "node:child_process";
 import fs from "node:fs";

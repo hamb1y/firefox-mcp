@@ -1,4 +1,4 @@
-# WebMCP Controller (firefox-mcp) — full-control Firefox MCP
+# WebMCP Controller — full-control Firefox MCP
 
 Live Firefox (your **current profile, all tabs**) driven by any MCP harness
 (Claude, opencode, Cursor, anything speaking Streamable HTTP). There is no
@@ -17,7 +17,7 @@ click **Copy MCP config** in the add-on popup, paste that into your harness.
 ```text
  Firefox                                   helper (native messaging host)        harness
 +------------------------+  stdin/stdout  +-------------------------------+     +-----------------+
-| WebExtension           | <------------> | firefox-mcp-host              |     | Claude / opencode|
+| WebExtension           | <------------> | webmcp-host              |     | Claude / opencode|
 | background.js          |  (Firefox      |  started & stopped by Firefox |     | / any MCP client |
 |  connectNative(...)    |   launches it) |  127.0.0.1:8901/mcp  <---------------- POST /mcp       |
 +------------------------+                +-------------------------------+     +-----------------+
@@ -46,18 +46,18 @@ The add-on's popup shows this for your system with a **Copy command** button.
 **Windows** — open PowerShell or Command Prompt and paste:
 
 ```bat
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/hamb1y/webmcp-controller/releases/latest/download/install.ps1 | iex"
 ```
 
 **macOS / Linux / WSL** — open Terminal and paste (inside WSL it installs the Windows helper for you):
 
 ```sh
-curl -fsSL https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/hamb1y/webmcp-controller/releases/latest/download/install.sh | sh
 ```
 
 The script picks the right binary (x64/arm64), checks its SHA-256 and runs
-`install`. Prefer clicking? Grab `firefox-mcp-host-<os>-<arch>` from the
-[releases page](https://github.com/hamb1y/firefox-mcp/releases/latest) — on
+`install`. Prefer clicking? Grab `webmcp-host-<os>-<arch>` from the
+[releases page](https://github.com/hamb1y/webmcp-controller/releases/latest) — on
 Windows double-click the `.exe`; elsewhere `chmod +x` it and run it with `install`.
 
 Already installed? Run the same command again to **update**: Firefox switches
@@ -68,9 +68,9 @@ to the new helper by itself within a few seconds, no restart needed.
 
 | OS | Binary goes to | Registered via |
 |---|---|---|
-| Windows | `%LOCALAPPDATA%\firefox-mcp\` | `HKCU\Software\Mozilla\NativeMessagingHosts\firefox_mcp_bridge` |
-| macOS | `~/Library/Application Support/firefox-mcp/` | `~/Library/Application Support/Mozilla/NativeMessagingHosts/` |
-| Linux | `~/.local/share/firefox-mcp/` | `~/.mozilla/native-messaging-hosts/` (+ snap path) |
+| Windows | `%LOCALAPPDATA%\webmcp-controller\` | `HKCU\Software\Mozilla\NativeMessagingHosts\webmcp_controller` |
+| macOS | `~/Library/Application Support/webmcp-controller/` | `~/Library/Application Support/Mozilla/NativeMessagingHosts/` |
+| Linux | `~/.local/share/webmcp-controller/` | `~/.mozilla/native-messaging-hosts/` (+ snap path) |
 
 Other commands: `status`, `uninstall`, `version`, `help`.
 From a source checkout: `npm install && npm run install-host` (uses Node instead
@@ -116,7 +116,7 @@ WSL2 (default NAT networking) can't reach Windows' `127.0.0.1`. Easiest:
 
 1. Add-on toolbar icon → **Settings** → **2. Connect your AI harness** → tick
    **Allow harnesses inside WSL to connect**.
-2. Windows Firewall asks about `firefox-mcp-host` → tick **Private networks**
+2. Windows Firewall asks about `webmcp-host` → tick **Private networks**
    → **Allow access**.
 3. Same section → **Format** → **Claude Code inside WSL** → copy. It uses `$(ip route show default | awk '{print $3}')` for the Windows
    address, so it survives reboots.
@@ -159,8 +159,11 @@ harnesses do it without prompting.
 - Re-running the installer while Firefox is open replaces the helper in
   place; the running helper notices, exits, and the add-on reconnects to the
   new one.
-- 0.3.0 changed the add-on ID to `firefox-mcp@hamb1y.github.io`. If you had
-  0.2.x, re-run the install command once so the helper accepts the new ID.
+- 0.3.4 renamed everything from firefox-mcp to WebMCP Controller (add-on ID,
+  native host name, helper binary, install folder). Older add-ons and helpers
+  don't talk to the new ones: install the new add-on and run the install
+  command once. The new installer removes the old `firefox_mcp_bridge`
+  registration; delete the old `firefox-mcp` folder once Firefox is closed.
 
 ## Development
 
@@ -169,7 +172,7 @@ npm install
 npm run build && npm run typecheck
 node test/e2e.mjs                 # real background.js (mocked browser APIs) + real helper over native messaging and HTTP
 MISSING=1 node test/e2e.mjs       # the "helper not installed" flow
-node test/e2e.mjs dist/host/firefox-mcp-host-linux-x64   # same, against a compiled helper
+node test/e2e.mjs dist/host/webmcp-host-linux-x64   # same, against a compiled helper
 npx web-ext@8 lint -s extension
 ```
 
@@ -282,7 +285,7 @@ Tool names below match `registerTool(` in `mcp-server/src/tools/*.ts` exactly
 it sees one). Then press **Retry**.
 - **Popup says the helper is too old / the add-on is too old.** Run the
   install command again, or update the add-on, as the popup says.
-- **Worked on 0.2.x, "not installed" on 0.3.0.** The add-on ID changed; run the
+- **Worked before 0.3.4, "not installed" after.** Everything was renamed; run the
   install command once more.
 - **"Port 8901 is already in use".** Another app, or this add-on in a second
   Firefox profile, holds it. Settings → Port → pick another → Save, then
@@ -300,7 +303,7 @@ it sees one). Then press **Retry**.
   (default 10000, max 60000); the helper extends its 30s watchdog to
   `timeoutMs + 15s` for that call.
 - **Helper logs.** The helper writes to stderr, which Firefox shows in the
-  Browser Console (Ctrl+Shift+J) prefixed `[firefox-mcp]`.
+  Browser Console (Ctrl+Shift+J) prefixed `[webmcp]`.
 
 ## Limits & safety
 
@@ -333,7 +336,7 @@ Two lanes, same upload flow at
 
 Steps (both lanes):
 
-1. `bash scripts/pack-extension.sh` → `firefox-mcp-bridge.zip`
+1. `bash scripts/pack-extension.sh` → `webmcp-controller.zip`
    (manifest at zip root, `web-ext lint` clean).
 2. Either upload the zip at
    [addons.mozilla.org/developers](https://addons.mozilla.org/developers/)

@@ -2,8 +2,8 @@
 (function () {
 'use strict';
 
-var BIN = 'firefox-mcp-host';
-var DOWNLOAD = 'https://github.com/hamb1y/firefox-mcp/releases/latest/download/';
+var BIN = 'webmcp-host';
+var DOWNLOAD = 'https://github.com/hamb1y/webmcp-controller/releases/latest/download/';
 
 /* runtime.getPlatformInfo() -> download + one-line install for this computer. */
 function hostSetup(platform) {

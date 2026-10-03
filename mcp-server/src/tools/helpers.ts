@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { BridgeMethod } from "@firefox-mcp/shared";
+import type { BridgeMethod } from "@webmcp-controller/shared";
 import { BridgeError, type ExtensionBridge } from "../bridge/bridge.js";
 import type { ServerConfig } from "../config.js";
 

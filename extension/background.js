@@ -1,6 +1,6 @@
 /* WebMCP Controller — background page.
  * Plain classic script (no modules). Firefox launches the companion helper
- * (native messaging host "firefox_mcp_bridge") on connectNative(); the helper
+ * (native messaging host "webmcp_controller") on connectNative(); the helper
  * serves MCP over HTTP to your AI harness and relays tool calls here.
  *
  * Wire protocol (see shared/src/protocol.ts), framed by Firefox:
@@ -20,11 +20,11 @@
 var B = (typeof browser !== 'undefined') ? browser : chrome;
 var HAS_PROMISES = (typeof browser !== 'undefined');
 var EXT_VERSION = (function () { try { return B.runtime.getManifest().version; } catch (e) { return '0.0.0'; } })();
-var EXT_ID_FALLBACK = 'firefox-mcp@hamb1y.github.io';
+var EXT_ID_FALLBACK = 'webmcp-controller@hamb1y.github.io';
 // Breaking wire-protocol version; keep in sync with PROTOCOL in shared/src/protocol.ts.
 var PROTOCOL = 1;
 
-var NATIVE_HOST = 'firefox_mcp_bridge';
+var NATIVE_HOST = 'webmcp_controller';
 var DEFAULT_PORT = 8901;
 var DEFAULT_BIND = '127.0.0.1';
 var BACKOFFS = [1000, 2000, 5000, 10000, 30000]; // ms, last value repeats

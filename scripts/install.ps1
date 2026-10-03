@@ -1,14 +1,14 @@
 # WebMCP Controller — helper installer for Windows.
-#   irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex
-# Downloads the right firefox-mcp-host .exe and registers it with Firefox (per user, no admin).
+#   irm https://github.com/hamb1y/webmcp-controller/releases/latest/download/install.ps1 | iex
+# Downloads the right webmcp-host .exe and registers it with Firefox (per user, no admin).
 & {
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue' # the progress bar makes Invoke-WebRequest very slow on PowerShell 5.1
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-  $base = if ($env:FIREFOX_MCP_BASE) { $env:FIREFOX_MCP_BASE } else { 'https://github.com/hamb1y/firefox-mcp/releases/latest/download' }
+  $base = if ($env:WEBMCP_BASE) { $env:WEBMCP_BASE } else { 'https://github.com/hamb1y/webmcp-controller/releases/latest/download' }
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'x64' }
-  $name = "firefox-mcp-host-windows-$arch.exe"
+  $name = "webmcp-host-windows-$arch.exe"
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ("fxmcp-" + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $tmp | Out-Null
   $exe = Join-Path $tmp $name

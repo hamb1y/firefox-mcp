@@ -19,7 +19,7 @@ function current() {
     "package.json": readJson("package.json").version,
     "shared/package.json": readJson("shared/package.json").version,
     "mcp-server/package.json": readJson("mcp-server/package.json").version,
-    "mcp-server/package.json (shared dep)": readJson("mcp-server/package.json").dependencies["@firefox-mcp/shared"],
+    "mcp-server/package.json (shared dep)": readJson("mcp-server/package.json").dependencies["@webmcp-controller/shared"],
     "extension/manifest.json": readJson("extension/manifest.json").version,
     [VERSION_TS]: (fs.readFileSync(rel(VERSION_TS), "utf8").match(/VERSION = "([^"]+)"/) || [])[1],
   };
@@ -50,7 +50,7 @@ if (!/^\d+\.\d+\.\d+$/.test(v)) {
 for (const p of ["package.json", "shared/package.json", "mcp-server/package.json", "extension/manifest.json"]) {
   const j = readJson(p);
   j.version = v;
-  if (j.dependencies?.["@firefox-mcp/shared"]) j.dependencies["@firefox-mcp/shared"] = v;
+  if (j.dependencies?.["@webmcp-controller/shared"]) j.dependencies["@webmcp-controller/shared"] = v;
   writeJson(p, j);
 }
 fs.writeFileSync(rel(VERSION_TS), versionTs(v));

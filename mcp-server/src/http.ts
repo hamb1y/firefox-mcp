@@ -6,7 +6,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
-import { VERSION } from "@firefox-mcp/shared";
+import { VERSION } from "@webmcp-controller/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { ServerConfig } from "./config.js";
@@ -120,7 +120,7 @@ export class McpHttp {
     const err = await this.listenOne(app, config.port, config.bind);
     if (err) {
       this.state.error = err;
-      console.error(`[firefox-mcp] ${err}`);
+      console.error(`[webmcp] ${err}`);
       this.emit();
       return;
     }
@@ -128,7 +128,7 @@ export class McpHttp {
     if (wildcard && config.allowWsl) this.state.extraUrls = wsl.map((a) => urlFor(a, config.port));
     for (const addr of extra) {
       const e = await this.listenOne(app, config.port, addr);
-      if (e) console.error(`[firefox-mcp] WSL listener: ${e}`);
+      if (e) console.error(`[webmcp] WSL listener: ${e}`);
       else this.state.extraUrls.push(urlFor(addr, config.port));
     }
     this.emit();
@@ -151,7 +151,7 @@ export class McpHttp {
       });
       srv.listen(port, bind, () => {
         this.servers.push(srv);
-        console.error(`[firefox-mcp] MCP listening on ${bind}:${port}`);
+        console.error(`[webmcp] MCP listening on ${bind}:${port}`);
         resolve("");
       });
     });
@@ -183,7 +183,7 @@ export class McpHttp {
       res
         .type("text")
         .send(
-          `firefox-mcp ${SERVER_VERSION}\nextension: ${this.bridge.connected ? "connected" : "disconnected"}\n` +
+          `webmcp-controller ${SERVER_VERSION}\nextension: ${this.bridge.connected ? "connected" : "disconnected"}\n` +
             `MCP endpoint: POST /mcp (Streamable HTTP, Authorization: Bearer <token from the add-on popup>)\n`,
         );
     });
@@ -193,7 +193,7 @@ export class McpHttp {
       try {
         // Stateless: one McpServer + transport per request.
         const server = new McpServer(
-          { name: "firefox-mcp", version: SERVER_VERSION },
+          { name: "webmcp-controller", version: SERVER_VERSION },
           { instructions: SERVER_INSTRUCTIONS },
         );
         registerFirefoxTools(server, this.bridge, this.config!);
@@ -204,7 +204,7 @@ export class McpHttp {
         await server.connect(transport);
         await transport.handleRequest(req, res, body);
       } catch (err) {
-        console.error(`[firefox-mcp] MCP request failed: ${String(err)}`);
+        console.error(`[webmcp] MCP request failed: ${String(err)}`);
         if (!res.headersSent) {
           res.status(500).json({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "internal error" } });
         }

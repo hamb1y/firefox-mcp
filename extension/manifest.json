@@ -1,10 +1,10 @@
 {
   "manifest_version": 2,
   "name": "WebMCP Controller",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Let your own AI harness (Claude Code, opencode, Cursor…) read and drive this Firefox over MCP, with a live AI cursor. Needs the small companion helper app.",
   "author": "hamb1y",
-  "homepage_url": "https://github.com/hamb1y/firefox-mcp",
+  "homepage_url": "https://github.com/hamb1y/webmcp-controller",
   "icons": {
     "48": "icons/icon-48.png",
     "96": "icons/icon-96.png",
@@ -12,7 +12,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "firefox-mcp@hamb1y.github.io",
+      "id": "webmcp-controller@hamb1y.github.io",
       "strict_min_version": "142.0",
       "data_collection_permissions": {
         "required": [

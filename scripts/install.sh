@@ -1,12 +1,12 @@
 #!/bin/sh
 # WebMCP Controller — helper installer for macOS and Linux.
-#   curl -fsSL https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.sh | sh
-# Downloads the right firefox-mcp-host binary, checks it, and registers it with Firefox.
+#   curl -fsSL https://github.com/hamb1y/webmcp-controller/releases/latest/download/install.sh | sh
+# Downloads the right webmcp-host binary, checks it, and registers it with Firefox.
 set -eu
-BASE="${FIREFOX_MCP_BASE:-https://github.com/hamb1y/firefox-mcp/releases/latest/download}"
+BASE="${WEBMCP_BASE:-https://github.com/hamb1y/webmcp-controller/releases/latest/download}"
 
 # Inside WSL, Firefox is the Windows one: install the Windows helper from here.
-if [ -z "${FIREFOX_MCP_FORCE:-}" ] && grep -qi microsoft /proc/version 2>/dev/null; then
+if [ -z "${WEBMCP_FORCE:-}" ] && grep -qi microsoft /proc/version 2>/dev/null; then
   ps=$(command -v powershell.exe 2>/dev/null || echo /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe)
   if [ -x "$ps" ]; then
     echo "WSL detected: installing the helper for Windows Firefox."
@@ -14,7 +14,7 @@ if [ -z "${FIREFOX_MCP_FORCE:-}" ] && grep -qi microsoft /proc/version 2>/dev/nu
     (cd /mnt/c 2>/dev/null || true; "$ps" -NoProfile -ExecutionPolicy Bypass -Command "irm $BASE/install.ps1 | iex")
     echo
     echo "For a harness inside WSL: add-on Settings > tick \"Allow harnesses inside WSL to connect\","
-    echo "then Format > \"Claude Code inside WSL\". (Firefox inside WSL itself? Re-run with FIREFOX_MCP_FORCE=1.)"
+    echo "then Format > \"Claude Code inside WSL\". (Firefox inside WSL itself? Re-run with WEBMCP_FORCE=1.)"
     exit 0
   fi
   echo "This is WSL, but Windows PowerShell isn't reachable. In Windows, open PowerShell or Command Prompt and paste:" >&2
@@ -37,7 +37,7 @@ if [ "$os" = darwin ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_transla
   arch=arm64
 fi
 
-name="firefox-mcp-host-$os-$arch"
+name="webmcp-host-$os-$arch"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 

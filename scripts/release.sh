@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REPO="${REPO:-hamb1y/firefox-mcp}"
+REPO="${REPO:-hamb1y/webmcp-controller}"
 TAG="v$(node -p 'require("./package.json").version')"
 OUT=dist/host
 
@@ -14,8 +14,8 @@ node scripts/set-version.mjs --check
 bash scripts/build-host.sh
 bash scripts/pack-extension.sh >/dev/null
 cp scripts/install.sh scripts/install.ps1 "$OUT/"
-cp firefox-mcp-bridge.zip "$OUT/"
-(cd "$OUT" && rm -f SHA256SUMS && sha256sum firefox-mcp-host-* install.sh install.ps1 firefox-mcp-bridge.zip > SHA256SUMS)
+cp webmcp-controller.zip "$OUT/"
+(cd "$OUT" && rm -f SHA256SUMS && sha256sum webmcp-host-* install.sh install.ps1 webmcp-controller.zip > SHA256SUMS)
 
 NOTES="$(cat <<MD
 Helper app for the **WebMCP Controller** add-on.
@@ -43,4 +43,4 @@ if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
 else
   gh release create "$TAG" --repo "$REPO" --title "WebMCP Controller helper $TAG" --notes "$NOTES" "$OUT"/*
 fi
-echo "[firefox-mcp] released $TAG → https://github.com/$REPO/releases/tag/$TAG"
+echo "[webmcp] released $TAG → https://github.com/$REPO/releases/tag/$TAG"

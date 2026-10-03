@@ -1,5 +1,5 @@
 /**
- * firefox-mcp-host: the native messaging host for the WebMCP Controller add-on.
+ * webmcp-host: the native messaging host for the WebMCP Controller add-on.
  *
  * Two modes, one binary:
  *  - Launched by Firefox (argv = [manifestPath, extensionId], stdin is a pipe):
@@ -29,26 +29,26 @@ import {
   PROTOCOL,
   type HostExitMessage,
   type HostStatusMessage,
-} from "@firefox-mcp/shared";
+} from "@webmcp-controller/shared";
 import { ExtensionBridge } from "./bridge/bridge.js";
 import { DEFAULT_BIND, DEFAULT_PORT } from "./config.js";
 import { McpHttp, SERVER_VERSION } from "./http.js";
 
-const EXTENSION_ID = "firefox-mcp@hamb1y.github.io";
-/** IDs of older add-on builds, still allowed so an un-updated add-on gets "update me" instead of "not installed". */
-const LEGACY_EXTENSION_IDS = ["firefox-mcp-bridge@example.com"];
+const EXTENSION_ID = "webmcp-controller@hamb1y.github.io";
+/** Pre-0.3.4 native host name; its registration is removed on install so stale helpers can't be launched. */
+const LEGACY_HOST_NAME = "firefox_mcp_bridge";
 const MAX_OUT = 1024 * 1024; // Firefox rejects host->extension messages over 1 MB
 
 // ===================================================================== host
 
 function runHost(): void {
-  process.on("uncaughtException", (e) => console.error(`[firefox-mcp] uncaught: ${e?.stack ?? e}`));
-  process.on("unhandledRejection", (e) => console.error(`[firefox-mcp] unhandled: ${String(e)}`));
+  process.on("uncaughtException", (e) => console.error(`[webmcp] uncaught: ${e?.stack ?? e}`));
+  process.on("unhandledRejection", (e) => console.error(`[webmcp] unhandled: ${String(e)}`));
 
   const write = (obj: unknown): void => {
     const body = Buffer.from(JSON.stringify(obj), "utf8");
     if (body.length > MAX_OUT) {
-      console.error(`[firefox-mcp] dropping ${body.length}-byte message to extension (over 1 MB)`);
+      console.error(`[webmcp] dropping ${body.length}-byte message to extension (over 1 MB)`);
       return;
     }
     const header = Buffer.alloc(4);
@@ -70,14 +70,14 @@ function runHost(): void {
   http.onChange = sendStatus;
   bridge.onStatusChange = (connected, info) => {
     console.error(
-      `[firefox-mcp] extension ${connected ? `connected (v${info?.version}, Firefox ${info?.firefoxVersion})` : "disconnected"}`,
+      `[webmcp] extension ${connected ? `connected (v${info?.version}, Firefox ${info?.firefoxVersion})` : "disconnected"}`,
     );
   };
 
   const onMessage = (msg: unknown): void => {
     if (isHello(msg)) {
       const p = msg.hello.protocol ?? 1;
-      if (p !== PROTOCOL) console.error(`[firefox-mcp] add-on speaks protocol ${p}, this helper speaks ${PROTOCOL}`);
+      if (p !== PROTOCOL) console.error(`[webmcp] add-on speaks protocol ${p}, this helper speaks ${PROTOCOL}`);
       bridge.connect(link, msg.hello);
       sendStatus();
       return;
@@ -87,7 +87,7 @@ function runHost(): void {
       const port = Number.isInteger(c.port) && c.port > 0 && c.port < 65536 ? c.port : DEFAULT_PORT;
       const bind = typeof c.bind === "string" && c.bind.trim() ? c.bind.trim() : DEFAULT_BIND;
       if (typeof c.token !== "string" || c.token.length < 16) {
-        console.error("[firefox-mcp] refusing hostConfig without a token of at least 16 chars");
+        console.error("[webmcp] refusing hostConfig without a token of at least 16 chars");
         return;
       }
       void http.apply({
@@ -116,7 +116,7 @@ function runHost(): void {
       try {
         msg = JSON.parse(body);
       } catch {
-        console.error("[firefox-mcp] ignoring non-JSON message from extension");
+        console.error("[webmcp] ignoring non-JSON message from extension");
         continue;
       }
       onMessage(msg);
@@ -141,14 +141,14 @@ function runHost(): void {
     fs.watchFile(exe, { interval: 2000, persistent: false }, (cur) => {
       if (before && cur.mtimeMs === before.mtimeMs && cur.ino === before.ino && cur.size === before.size) return;
       if (cur.size === 0) return; // mid-write; wait for the next tick
-      console.error("[firefox-mcp] helper binary was replaced; exiting so Firefox starts the new one");
+      console.error("[webmcp] helper binary was replaced; exiting so Firefox starts the new one");
       const bye: HostExitMessage = { hostExit: { reason: "updated" } };
       write(bye);
       shutdown();
     });
   }
 
-  console.error(`[firefox-mcp] host ${SERVER_VERSION} started (pid ${process.pid})`);
+  console.error(`[webmcp] host ${SERVER_VERSION} started (pid ${process.pid})`);
 }
 
 // ================================================================ installer
@@ -165,11 +165,11 @@ function installDir(): string {
   const home = os.homedir();
   switch (platform()) {
     case "win":
-      return path.join(process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "firefox-mcp");
+      return path.join(process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "webmcp-controller");
     case "mac":
-      return path.join(home, "Library", "Application Support", "firefox-mcp");
+      return path.join(home, "Library", "Application Support", "webmcp-controller");
     default:
-      return path.join(process.env.XDG_DATA_HOME ?? path.join(home, ".local", "share"), "firefox-mcp");
+      return path.join(process.env.XDG_DATA_HOME ?? path.join(home, ".local", "share"), "webmcp-controller");
   }
 }
 
@@ -239,18 +239,18 @@ function cleanupOld(dir: string): void {
 function installExecutable(dir: string): string {
   const win = platform() === "win";
   if (isCompiled()) {
-    const dest = path.join(dir, win ? "firefox-mcp-host.exe" : "firefox-mcp-host");
+    const dest = path.join(dir, win ? "webmcp-host.exe" : "webmcp-host");
     copySelf(dest);
     return dest;
   }
   // Dev install: `node dist/host.js install` → launcher script pointing at this checkout.
   const script = path.resolve(process.argv[1] ?? "");
   if (win) {
-    const dest = path.join(dir, "firefox-mcp-host.bat");
+    const dest = path.join(dir, "webmcp-host.bat");
     fs.writeFileSync(dest, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
     return dest;
   }
-  const dest = path.join(dir, "firefox-mcp-host.sh");
+  const dest = path.join(dir, "webmcp-host.sh");
   fs.writeFileSync(dest, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
   fs.chmodSync(dest, 0o755);
   return dest;
@@ -263,11 +263,29 @@ function hostManifest(exe: string, extensionId: string): string {
       description: "WebMCP Controller host: serves MCP to your local AI tools",
       path: exe,
       type: "stdio",
-      allowed_extensions: [extensionId, ...LEGACY_EXTENSION_IDS.filter((id) => id !== extensionId)],
+      allowed_extensions: [extensionId],
     },
     null,
     2,
   );
+}
+
+/** Unregister the pre-rename host so Firefox never launches a stale firefox-mcp helper. */
+function removeLegacy(): string[] {
+  const removed: string[] = [];
+  if (platform() === "win") {
+    const key = `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${LEGACY_HOST_NAME}`;
+    if (spawnSync("reg", ["delete", key, "/f"], { encoding: "utf8" }).status === 0) removed.push(`registry ${key}`);
+  } else {
+    for (const d of manifestDirs()) {
+      const file = path.join(d, `${LEGACY_HOST_NAME}.json`);
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+        removed.push(file);
+      }
+    }
+  }
+  return removed;
 }
 
 function install(extensionId: string): void {
@@ -294,9 +312,12 @@ function install(extensionId: string): void {
     }
   }
 
+  const legacy = removeLegacy();
+
   console.error(`\nWebMCP Controller host ${SERVER_VERSION} installed.\n`);
   console.error(`  program:  ${exe}`);
   for (const w of written) console.error(`  manifest: ${w}`);
+  for (const l of legacy) console.error(`  removed old firefox-mcp registration: ${l}`);
   console.error(`\nDone. The WebMCP Controller toolbar icon turns green within a few seconds`);
   console.error(`(open its popup to make it instant), then use "Copy MCP config" there.`);
   console.error(`If Firefox was already running an older helper, it switches to this one automatically.\n`);
@@ -329,7 +350,7 @@ function uninstall(): void {
 }
 
 function status(): void {
-  console.error(`firefox-mcp-host ${SERVER_VERSION} (${process.platform}/${process.arch}, ${isCompiled() ? "binary" : "node"})`);
+  console.error(`webmcp-host ${SERVER_VERSION} (${process.platform}/${process.arch}, ${isCompiled() ? "binary" : "node"})`);
   console.error(`install dir: ${installDir()}`);
   if (platform() === "win") {
     const r = spawnSync("reg", ["query", REG_KEY, "/ve"], { encoding: "utf8" });
@@ -343,12 +364,12 @@ function status(): void {
 }
 
 function usage(): void {
-  console.error(`firefox-mcp-host ${SERVER_VERSION}
+  console.error(`webmcp-host ${SERVER_VERSION}
 
 Usage:
-  firefox-mcp-host install [--extension-id ID]   register with Firefox (default when double-clicked)
-  firefox-mcp-host uninstall                     remove registration and files
-  firefox-mcp-host status                        show what's installed where
+  webmcp-host install [--extension-id ID]   register with Firefox (default when double-clicked)
+  webmcp-host uninstall                     remove registration and files
+  webmcp-host status                        show what's installed where
 `);
 }
 

@@ -1,6 +1,6 @@
 /**
  * Shared wire protocol between the Firefox WebExtension and the native host
- * (firefox-mcp-host), which Firefox launches via native messaging and which
+ * (webmcp-host), which Firefox launches via native messaging and which
  * serves MCP over HTTP to the harness.
  *
  * Transport: native messaging stdio (uint32 length prefix + UTF-8 JSON).
@@ -229,7 +229,7 @@ export function isHostConfig(m: unknown): m is HostConfigMessage {
   return typeof m === "object" && m !== null && "hostConfig" in m;
 }
 
-export const NATIVE_HOST_NAME = "firefox_mcp_bridge";
+export const NATIVE_HOST_NAME = "webmcp_controller";
 
 export const CMD_TIMEOUT_MS = 30_000;
 /** Breaking wire-protocol version; keep in sync with PROTOCOL in extension/background.js. */

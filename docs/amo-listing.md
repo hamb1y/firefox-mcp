@@ -32,13 +32,13 @@ Safety:
 • Closing tabs or windows and deleting bookmarks need explicit confirmation
 • No access to saved passwords; cookies are read-only
 
-Source code for the add-on and the helper (MIT): https://github.com/hamb1y/firefox-mcp
+Source code for the add-on and the helper (MIT): https://github.com/hamb1y/webmcp-controller
 
 ## Categories
 Firefox: "Tabs" and "Other"
 
 ## Support
-Website: https://github.com/hamb1y/firefox-mcp/issues
+Website: https://github.com/hamb1y/webmcp-controller/issues
 
 ## License
 MIT License
@@ -55,12 +55,12 @@ Settings (port, token, toggles) are stored locally in Firefox extension storage.
 ## Notes to reviewer
 This add-on uses native messaging with an open-source companion helper app, like KeePassXC-Browser or 1Password do. The add-on's JavaScript is not minified or bundled; no build step.
 
-Helper source: https://github.com/hamb1y/firefox-mcp/tree/main/mcp-server (TypeScript, compiled to single-file binaries with `bun build --compile`). Release binaries and SHA256SUMS are at https://github.com/hamb1y/firefox-mcp/releases/latest
+Helper source: https://github.com/hamb1y/webmcp-controller/tree/main/mcp-server (TypeScript, compiled to single-file binaries with `bun build --compile`). Release binaries and SHA256SUMS are at https://github.com/hamb1y/webmcp-controller/releases/latest
 
 To test:
 1. Install the add-on, then install the helper:
-   Linux/macOS: curl -fsSL https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.sh | sh
-   Windows (PowerShell or cmd): powershell -ExecutionPolicy Bypass -c "irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex"
+   Linux/macOS: curl -fsSL https://github.com/hamb1y/webmcp-controller/releases/latest/download/install.sh | sh
+   Windows (PowerShell or cmd): powershell -ExecutionPolicy Bypass -c "irm https://github.com/hamb1y/webmcp-controller/releases/latest/download/install.ps1 | iex"
 2. Click the toolbar icon. The dot turns green, then click "Copy MCP config" (contains URL + token).
 3. From a terminal (replace TOKEN):
    curl -s http://127.0.0.1:8901/mcp -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tabs_list","arguments":{"thought":"Listing tabs"}}}'

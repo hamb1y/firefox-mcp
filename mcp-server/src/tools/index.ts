@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { BridgeEvent } from "@firefox-mcp/shared";
+import type { BridgeEvent } from "@webmcp-controller/shared";
 import type { ExtensionBridge } from "../bridge/bridge.js";
 import type { ServerConfig } from "../config.js";
 import { callBridge, fmt, tabIdField, toBridgeError } from "./helpers.js";
