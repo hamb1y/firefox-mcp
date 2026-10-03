@@ -2,119 +2,187 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WebMCP Controller — Settings</title>
 <link rel="stylesheet" href="ui.css">
 <style>
-  body { font-size: 14px; max-width: 600px; margin: 24px auto; padding: 0 16px; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  h2 { font-size: 15px; margin: 26px 0 6px; }
-  p.hint { color: var(--muted); margin-top: 0; }
-  #status { display: flex; align-items: center; gap: 10px; background: var(--panel); border-radius: 8px; padding: 12px; margin: 16px 0; }
-  #status .txt { flex: 1; }
-  #status small { display: block; color: var(--muted); word-break: break-all; }
-  #status .err { color: var(--bad); }
-  label { display: block; margin: 12px 0 4px; font-weight: 600; }
-  .field { display: flex; gap: 6px; }
-  input[type=password], input[type=text], input[type=number], textarea, select {
-    flex: 1; width: 100%; box-sizing: border-box; padding: 7px 8px; font: 13px ui-monospace, monospace;
-    background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+  body { font-size: 14px; }
+  main { max-width: 640px; margin: 0 auto; padding: 28px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+  header { order: -3; }
+  #status { order: -2; }
+  .note { order: 2; }
+  header { display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .card.attention { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
+  .lead { color: var(--muted); margin: 0 0 12px; }
+
+  #status { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 0; }
+  #status .dot { width: 12px; height: 12px; }
+  #status .txt { flex: 1; min-width: 0; }
+  #stateTxt { font-weight: 600; }
+  #stateSub { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  #stateErr { display: block; color: var(--bad); font-size: 12px; overflow-wrap: anywhere; }
+  #stateErr:empty { display: none; }
+
+  #helperLine { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  #helperLine .sub { margin: 0; }
+  .intro { margin-bottom: 8px; }
+  #setup .row { max-width: 380px; margin: 8px 0; }
+  details { margin-top: 10px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details[open] summary { margin-bottom: 8px; }
+  .uninstall { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .uninstall code { word-break: break-all; }
+
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 4px 0 10px; }
+  .seg label { position: relative; cursor: pointer; }
+  .seg label + label { border-left: 1px solid var(--line); }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: block; padding: 6px 14px; font-size: 13px; }
+  .seg label:hover span { background: var(--panel); }
+  .seg input:checked + span { background: var(--accent); color: var(--accent-fg); }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -4px; }
+  .kindHint { margin: 0 0 8px; }
+
+  .code { position: relative; }
+  .code pre {
+    margin: 0; padding: 12px 88px 12px 12px; background: var(--panel); border-radius: 8px; max-height: 260px; overflow: auto;
+    font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
   }
-  select { flex: none; width: auto; font-family: inherit; }
-  textarea { min-height: 110px; resize: vertical; }
-  .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
-  .actions { margin-top: 14px; display: flex; gap: 8px; align-items: center; }
-  #msg { font-weight: 600; }
-  #msg.ok { color: var(--ok); }
-  #msg.err { color: var(--bad); }
-  #setup .row { margin: 8px 0; max-width: 360px; }
+  .code button { position: absolute; top: 8px; right: 8px; }
+
+  #wsl { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  #wslState { font-size: 13px; margin: 6px 0 0 24px; }
+  #wslState.ok { color: var(--ok); }
+  #wslState.warn { color: var(--warn); }
+  #wsl .sub { margin-left: 24px; }
+
+  .toggle + .sub { margin: 0 0 0 24px; }
+  .toggle ~ .toggle { margin-top: 16px; }
+
+  .lbl { display: block; font-weight: 600; margin: 14px 0 4px; }
+  .field { display: flex; gap: 6px; flex-wrap: wrap; }
+  .field input { flex: 1 1 200px; }
+  input[type=password], input[type=text], input[type=number] {
+    box-sizing: border-box; width: 100%; padding: 7px 9px; font: 13px ui-monospace, monospace;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
+  }
+  input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  input[aria-invalid=true] { border-color: var(--bad); }
+  .grid { display: grid; grid-template-columns: 140px 1fr; gap: 0 12px; }
+  .grid .sub { grid-column: 1 / -1; }
+  .actions { margin-top: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button:disabled { opacity: .5; cursor: default; filter: none; }
+  button.danger { background: var(--bad); border-color: var(--bad); color: var(--accent-fg); }
+  .formErr { color: var(--bad); font-size: 13px; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+    background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; transition: .2s;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #toast.err { background: var(--bad); color: #fff; }
+  .note { font-size: 12px; color: var(--muted); margin: 0; }
   [hidden] { display: none !important; }
-  details { margin-top: 8px; font-size: 12px; color: var(--muted); }
-  details summary { cursor: pointer; }
-  .note { margin-top: 28px; font-size: 12px; color: var(--muted); }
+  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<h1 style="display:flex;align-items:center;gap:10px"><img src="icons/icon.svg" width="32" height="32" alt="">WebMCP Controller</h1>
-<p class="hint">Lets your own AI harness read and drive this Firefox. A small helper app, started by Firefox, serves MCP on your machine.</p>
+<main>
+<header>
+  <img src="icons/icon.svg" width="36" height="36" alt="">
+  <div>
+    <h1>WebMCP Controller</h1>
+    <p>Lets your own AI harness read and drive this Firefox, through a small helper app on this computer.</p>
+  </div>
+</header>
 
-<div id="status"><span id="dot" class="dot"></span><div class="txt"><span id="stateTxt">Loading…</span><small id="stateSub"></small></div>
-  <button id="retry" type="button">Retry</button></div>
+<div id="status" class="card" role="status">
+  <span id="dot" class="dot"></span>
+  <div class="txt"><span id="stateTxt">Loading…</span><span id="stateErr"></span><span id="stateSub"></span></div>
+  <button id="retry" type="button" hidden>Retry</button>
+</div>
 
-<section id="install">
-  <h2><span id="installTitle">1. Install the helper app</span> <span id="osName" class="sub"></span></h2>
-  <div id="setup"></div>
-  <details><summary>Uninstall / other systems</summary>
-    Windows: <code>&amp; "$env:LOCALAPPDATA\webmcp-controller\webmcp-host.exe" uninstall</code>.
-    macOS: <code>~/Library/Application\ Support/webmcp-controller/webmcp-host uninstall</code>.
-    Linux: <code>~/.local/share/webmcp-controller/webmcp-host uninstall</code>.
-    All downloads (Windows, macOS, Linux; x64 and arm64):
-    <a href="https://github.com/hamb1y/webmcp-controller/releases/latest" target="_blank" rel="noopener">releases page</a>.
+<section id="install" class="card">
+  <div id="helperLine"><h2 id="installTitle">Helper app</h2><span id="helperInfo" class="sub"></span></div>
+  <div id="setupNow"></div>
+  <details id="setupLater"><summary>Reinstall, update or uninstall</summary><div id="setupLaterBody"></div>
+    <div class="uninstall">
+      To uninstall, run <code id="uninstallCmd"></code>
+      · <a href="https://github.com/hamb1y/webmcp-controller/releases/latest" target="_blank" rel="noopener">All downloads</a>
+    </div>
   </details>
 </section>
 
-<section>
-  <h2>2. Connect your AI harness</h2>
-  <div class="field">
-    <select id="kind" aria-label="Config format">
-      <option value="json">mcpServers JSON (Claude Desktop, Cursor, most clients)</option>
-      <option value="claude">Claude Code command</option>
-      <option value="opencode">opencode.json</option>
-      <option value="wsl" id="kindWsl">Claude Code inside WSL</option>
-    </select>
+<section id="connect" class="card">
+  <h2>Connect your AI</h2>
+  <div class="seg" role="radiogroup" aria-label="Harness">
+    <label><input type="radio" name="kind" value="claude"><span>Claude Code</span></label>
+    <label id="kindWsl"><input type="radio" name="kind" value="wsl"><span>Claude Code in WSL</span></label>
+    <label><input type="radio" name="kind" value="json"><span>JSON config</span></label>
+    <label><input type="radio" name="kind" value="opencode"><span>opencode</span></label>
+  </div>
+  <p id="kindHint" class="sub kindHint"></p>
+  <div class="code">
+    <pre id="cfg" tabindex="0" aria-label="Config to copy"></pre>
     <button id="copyCfg" type="button" class="primary">Copy</button>
   </div>
-  <textarea id="cfg" readonly spellcheck="false"></textarea>
   <div id="wsl" hidden>
-    <label class="switch"><input type="checkbox" id="allowWsl"> Allow harnesses inside WSL to connect</label>
-    <div class="sub">Also listens on the WSL network adapter (<span id="wslUrls">not active</span>), so Claude Code
-      running in WSL can reach this Firefox. Pick “Claude Code inside WSL” above for a command that finds the
-      address by itself. The first time, Windows may ask to allow <b>webmcp-host</b> through the firewall:
-      tick <b>Private networks</b> and click <b>Allow</b>. The token still protects it.
-      (With WSL mirrored networking you don’t need this; 127.0.0.1 works as-is.)</div>
+    <label class="switch"><input type="checkbox" id="allowWsl"> Let WSL connect to this Firefox</label>
+    <div id="wslState"></div>
+    <div class="sub">The helper also listens on Windows’ WSL network adapter. The first time, Windows may ask to let
+      <b>webmcp-host</b> through the firewall: tick <b>Private networks</b> and click <b>Allow</b>. The token still
+      protects it. That address changes when Windows restarts; if Claude Code can’t connect after a restart, run the
+      command again. With WSL’s mirrored networking you don’t need any of this: use <b>Claude Code</b> instead.</div>
   </div>
 </section>
 
-<section>
-  <h2>AI cursor</h2>
-  <label class="switch"><input type="checkbox" id="showCursor"> Show the AI cursor</label>
-  <div class="sub">A glowing cursor glides to whatever the AI clicks, types into or reads, with a little bubble saying
-    what it’s doing. It’s only a picture: it never takes over your mouse, and it’s left out of screenshots.</div>
+<section class="card">
+  <h2>While the AI works</h2>
+  <label class="switch toggle"><input type="checkbox" id="showCursor"> Show the AI cursor</label>
+  <div class="sub">A glowing cursor glides to whatever the AI clicks, types into or reads, with a bubble saying what
+    it’s doing. It’s only a picture: it never moves your mouse, and it’s left out of screenshots.</div>
+  <label class="switch toggle"><input type="checkbox" id="confirmDestructive"> Make the AI confirm before closing tabs or deleting things</label>
+  <div class="sub">The AI must pass <code>confirm: true</code> to close tabs or windows, remove bookmarks and similar.
+    It’s a guard against mistakes, not a security boundary.</div>
 </section>
 
-<section>
-  <h2>Settings</h2>
-  <form id="form">
-  <label for="token">Access token</label>
+<section class="card">
+  <h2>Token and port</h2>
+  <label class="lbl" for="token">Access token</label>
   <div class="field">
     <input type="password" id="token" readonly autocomplete="off" spellcheck="false">
     <button id="reveal" type="button">Show</button>
     <button id="copyToken" type="button">Copy</button>
-    <button id="regen" type="button">New</button>
+    <button id="regen" type="button">New token</button>
   </div>
-  <div class="sub">Generated by this add-on. Your harness sends it as <code>Authorization: Bearer …</code>. “New” invalidates the old one immediately.</div>
+  <div class="sub">Your AI sends this as <code>Authorization: Bearer …</code>. A new token locks out every harness
+    using the old one until you copy the new config into it.</div>
 
-  <label for="port">Port</label>
-  <input type="number" id="port" min="1024" max="65535" style="max-width: 140px">
-  <div class="sub">Change it if another app (or a second Firefox profile) already uses it.</div>
-
-  <label for="bind">Bind address</label>
-  <input type="text" id="bind" spellcheck="false" style="max-width: 220px">
-  <div class="sub"><code>127.0.0.1</code> = this computer only (recommended). <code>0.0.0.0</code> = reachable from your whole network; the token is then all that protects it.</div>
-
-  <label class="switch"><input type="checkbox" id="confirmDestructive"> Ask the AI to confirm before closing tabs or deleting things</label>
-  <div class="sub">The AI has to pass <code>confirm: true</code> for closing tabs and windows, removing bookmarks, and similar.
-    It’s a speed bump against mistakes, not a security boundary.</div>
-
-  <div class="actions">
-    <button id="save" type="submit" class="primary">Save</button>
-    <button id="reset" type="button">Defaults</button>
-    <span id="msg" role="status"></span>
-  </div>
+  <form id="form" novalidate>
+    <div class="grid">
+      <label class="lbl" for="port">Port</label>
+      <label class="lbl" for="bind">Listen on</label>
+      <input type="number" id="port" min="1024" max="65535" inputmode="numeric">
+      <input type="text" id="bind" spellcheck="false" autocomplete="off">
+      <div class="sub">Change the port if another app, or a second Firefox profile, already uses it.
+        <code>127.0.0.1</code> = this computer only (recommended). <code>0.0.0.0</code> = your whole network, protected only by the token.</div>
+    </div>
+    <div class="actions">
+      <button id="save" type="submit" class="primary" disabled>Save</button>
+      <button id="reset" type="button">Reset to defaults</button>
+      <span id="formErr" class="formErr" role="alert"></span>
+    </div>
   </form>
 </section>
 
-<p class="note">Privacy: page content, tabs, bookmarks and history go only to the helper on this computer and from
-there to the harness you connect. Nothing is sent anywhere else. Settings stay in this Firefox profile.</p>
+<p class="note">Privacy: page content, tabs, bookmarks and history go only to the helper on this computer, and from
+  there to the AI you connect. Nothing is sent anywhere else. Settings stay in this Firefox profile.</p>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script src="common.js"></script>
 <script src="options.js"></script>

@@ -16,6 +16,7 @@ function hostSetup(platform) {
       open: 'Open PowerShell or Command Prompt (Start menu → type “powershell” → Enter) and paste:',
       cmd: 'powershell -ExecutionPolicy Bypass -c "irm ' + DOWNLOAD + 'install.ps1 | iex"',
       file: BIN + '-windows-' + a + '.exe',
+      uninstall: '& "$env:LOCALAPPDATA\\webmcp-controller\\webmcp-host.exe" uninstall',
       manual: 'or download the app and double-click it (SmartScreen: More info → Run anyway)'
     };
   }
@@ -26,13 +27,15 @@ function hostSetup(platform) {
     open: mac ? 'Open Terminal (⌘ Space → type “terminal” → Enter) and paste:' : 'Open a terminal and paste:',
     cmd: 'curl -fsSL ' + DOWNLOAD + 'install.sh | sh',
     file: file,
+    uninstall: (mac ? '~/Library/Application\\ Support' : '~/.local/share') + '/webmcp-controller/webmcp-host uninstall',
     manual: 'or download the app, then run: chmod +x ' + file + ' && ./' + file + ' install'
   };
 }
 
 /* Install instructions as DOM: command + Copy, direct download link.
- * intro: optional sentence shown first (e.g. why an update is needed). */
-function renderSetup(container, platform, intro) {
+ * intro: optional sentence shown first (e.g. why an update is needed).
+ * installed: the helper already runs, so don't promise the page will turn green. */
+function renderSetup(container, platform, intro, installed) {
   var s = hostSetup(platform);
   container.textContent = '';
   if (intro) {
@@ -63,7 +66,7 @@ function renderSetup(container, platform, intro) {
   row.appendChild(dl);
   var m = document.createElement('div');
   m.className = 'sub';
-  m.textContent = s.manual + '. This page turns green by itself once it’s installed.';
+  m.textContent = s.manual + (installed ? '.' : '. This page turns green by itself once it’s installed.');
   [p, pre, row, m].forEach(function (el) { container.appendChild(el); });
   return s;
 }
@@ -74,18 +77,26 @@ function mcpUrl(st) {
   return 'http://' + host + ':' + ((st && st.port) || 8901) + '/mcp';
 }
 
+/* `claude mcp add` refuses a name that already exists, so drop any old "firefox" entry first
+ * (e.g. one holding a token from before a reinstall). User scope: it works from every folder. */
+function claudeAdd(url, auth, shell) {
+  var quiet = shell === 'powershell' ? ' 2>$null' : ' 2>/dev/null';
+  return 'claude mcp remove --scope user firefox' + quiet + '; claude mcp add --scope user --transport http firefox "' +
+    url + '" --header "Authorization: ' + auth + '"';
+}
+
 /* Harness config snippets. kind: 'json' | 'claude' | 'opencode' | 'wsl'. */
 function mcpConfig(st, kind) {
   var url = mcpUrl(st);
   var auth = 'Bearer ' + ((st && st.token) || '');
   if (kind === 'wsl') {
     // WSL's default gateway is Windows' WSL adapter, which the helper listens on when "Allow WSL" is on.
-    // Resolved when the command runs, because that address changes on every reboot.
+    // Looked up when the command runs; it changes when Windows restarts.
     var wslUrl = url.replace(/^http:\/\/[^/]+/, 'http://$(ip route show default | awk \'{print $3}\'):' + ((st && st.port) || 8901));
-    return 'claude mcp add --transport http firefox "' + wslUrl + '" --header "Authorization: ' + auth + '"';
+    return claudeAdd(wslUrl, auth, 'sh');
   }
   if (kind === 'claude') {
-    return 'claude mcp add --transport http firefox ' + url + ' --header "Authorization: ' + auth + '"';
+    return claudeAdd(url, auth, st && st.platform && st.platform.os === 'win' ? 'powershell' : 'sh');
   }
   if (kind === 'opencode') {
     return JSON.stringify({ mcp: { firefox: { type: 'remote', url: url, headers: { Authorization: auth } } } }, null, 2);
@@ -94,7 +105,22 @@ function mcpConfig(st, kind) {
 }
 
 function copy(text, btn) {
-  return navigator.clipboard.writeText(text).then(function () {
+  var write = navigator.clipboard && navigator.clipboard.writeText
+    ? navigator.clipboard.writeText(text)
+    : Promise.reject(new Error('no clipboard'));
+  return write.catch(function () {
+    // Fallback for when the async clipboard is unavailable.
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove();
+    if (!ok) throw new Error('Copy failed — select the text and press Ctrl+C');
+  }).then(function () {
     if (!btn) return;
     var old = btn.textContent;
     btn.textContent = 'Copied ✓';

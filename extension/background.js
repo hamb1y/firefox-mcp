@@ -1091,10 +1091,16 @@ function applyConfig() {
   else reconnectNow();
 }
 
+/* Only our own extension pages may reconfigure the bridge — never content scripts. Checked by the
+ * sender's URL, not by sender.tab: the settings page opens in a tab too. */
+function fromOwnPage(sender) {
+  var base = B.runtime.getURL('');
+  return !!(sender && sender.id === B.runtime.id && typeof sender.url === 'string' && sender.url.indexOf(base) === 0);
+}
+
 if (B.runtime && B.runtime.onMessage) {
   B.runtime.onMessage.addListener(function (msg, sender) {
-    // Only our own extension pages may reconfigure the bridge — never content scripts.
-    if (sender && sender.tab) return undefined;
+    if (!fromOwnPage(sender)) return undefined;
     var type = msg && msg.type;
     if (type === 'get-status') return Promise.resolve(statusSnapshot());
     if (type === 'probe') {

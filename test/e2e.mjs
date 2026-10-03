@@ -59,7 +59,7 @@ const COOKIES = [
 const onMsg = ev();
 const browser = {
   runtime: {
-    id: EXT_ID, getManifest: () => manifest, connectNative, onMessage: onMsg,
+    id: EXT_ID, getManifest: () => manifest, connectNative, onMessage: onMsg, getURL: (p = "") => "moz-extension://test-uuid/" + p,
     getBrowserInfo: async () => ({ version: "150.0" }), getPlatformInfo: async () => ({ os: "linux", arch: "x86-64" }), openOptionsPage() {},
   },
   storage: { local: { get: async (k) => Object.fromEntries(k.filter((x) => x in store).map((x) => [x, store[x]])), set: async (o) => Object.assign(store, o) } },
@@ -79,7 +79,10 @@ const browser = {
 };
 const ctx = vm.createContext({ browser, console: { log() {} }, setTimeout, clearTimeout, setInterval, crypto: globalThis.crypto, Promise, Uint8Array, URL, AbortController, AbortSignal });
 vm.runInContext(fs.readFileSync(path.join(root, "extension/background.js"), "utf8"), ctx);
-const ask = (m) => Promise.all(onMsg.l.map((f) => f(m, {}))).then((r) => r.find((x) => x !== undefined));
+// The settings page opens in a tab, so its messages carry sender.tab like a content script's do.
+const SETTINGS = { id: EXT_ID, url: "moz-extension://test-uuid/options.html", tab: { id: 9 } };
+const askAs = (sender, m) => Promise.all(onMsg.l.map((f) => f(m, sender))).then((r) => r.find((x) => x !== undefined));
+const ask = (m) => askAs(SETTINGS, m);
 const waitFor = async (pred, ms = 5000) => {
   let st;
   for (let t = 0; t < ms; t += 100) { st = await ask({ type: "get-status" }); if (pred(st)) return st; await sleep(100); }
@@ -192,6 +195,11 @@ await ask({ type: "set-config", port: port2, bind: "127.0.0.1" });
 st = await waitFor((s) => s.listening && s.url.includes(":" + port2));
 check("port change", st.url.includes(":" + port2) && (await tool("tabs_list")).status === 200, st.url);
 check("bad port rejected", !!(await ask({ type: "set-config", port: 80 })).error);
+check("settings tab is answered", !!(await ask({ type: "get-status" }))?.token);
+check("popup is answered", !!(await askAs({ id: EXT_ID, url: "moz-extension://test-uuid/popup.html" }, { type: "get-status" }))?.token);
+check("content script is ignored", (await askAs({ id: EXT_ID, url: "https://example.com/", tab: { id: 1 } }, { type: "regenerate-token" })) === undefined);
+check("other extension is ignored", (await askAs({ id: "evil@x", url: "moz-extension://other/options.html" }, { type: "get-status" })) === undefined);
+check("sender without a URL is ignored", (await askAs({ id: EXT_ID }, { type: "get-status" })) === undefined);
 
 const quick = [PORT + 62, PORT + 63, PORT + 64];
 await Promise.all(quick.map((p) => ask({ type: "set-config", port: p })));
