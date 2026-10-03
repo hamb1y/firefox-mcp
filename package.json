@@ -17,5 +17,5 @@
     "install-host": "npm run build && node mcp-server/dist/host.js install",
     "release": "bash scripts/release.sh"
   },
-  "license": "MIT"
+  "license": "MPL-2.0"
 }

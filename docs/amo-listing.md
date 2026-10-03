@@ -32,7 +32,7 @@ Safety:
 • Closing tabs or windows and deleting bookmarks need explicit confirmation
 • No access to saved passwords; cookies are read-only
 
-Source code for the add-on and the helper (MIT): https://github.com/hamb1y/webmcp-controller
+Source code for the add-on and the helper (MPL 2.0): https://github.com/hamb1y/webmcp-controller
 
 ## Categories
 Firefox: "Tabs" and "Other"
@@ -41,7 +41,7 @@ Firefox: "Tabs" and "Other"
 Website: https://github.com/hamb1y/webmcp-controller/issues
 
 ## License
-MIT License
+Mozilla Public License 2.0
 
 ## Privacy policy
 WebMCP Controller does not collect, store or send any data to the developer or to any third party, and contains no analytics or tracking.

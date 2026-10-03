@@ -8,5 +8,5 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
-  "license": "MIT"
+  "license": "MPL-2.0"
 }
