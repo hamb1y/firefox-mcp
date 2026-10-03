@@ -1,4 +1,4 @@
-/* Firefox MCP Bridge — content script (isolated world).
+/* WebMCP Controller — content script (isolated world).
  * Plain classic script (no modules). Idempotent: safe to re-inject.
  * Owns AX `ref` numbering per snapshot `generation`.
  */

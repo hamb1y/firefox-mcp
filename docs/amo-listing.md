@@ -1,16 +1,16 @@
 # AMO listing: paste-ready text
 
 ## Name
-Firefox MCP Bridge
+WebMCP Controller
 
 ## Add-on URL (slug)
-firefox-mcp-bridge
+webmcp-controller
 
 ## Summary (max 250 chars)
 Let your own AI agent (Claude Code, opencode, Cursor, any MCP client) read and drive this Firefox over MCP, with a live AI cursor showing what it's doing. Everything stays on your computer. Needs a small free companion helper app.
 
 ## Description
-Firefox MCP Bridge connects the Firefox you already use (your tabs, logins and bookmarks) to an AI agent running on your own computer, through the Model Context Protocol (MCP).
+WebMCP Controller connects the Firefox you already use (your tabs, logins and bookmarks) to an AI agent running on your own computer, through the Model Context Protocol (MCP).
 
 What the agent can do:
 • List, open, switch, move and close tabs and windows
@@ -44,7 +44,7 @@ Website: https://github.com/hamb1y/firefox-mcp/issues
 MIT License
 
 ## Privacy policy
-Firefox MCP Bridge does not collect, store or send any data to the developer or to any third party, and contains no analytics or tracking.
+WebMCP Controller does not collect, store or send any data to the developer or to any third party, and contains no analytics or tracking.
 
 The add-on exchanges data only with the companion helper app on your own computer, through Firefox native messaging. The helper makes that data available only to programs you connect to it on your computer (by default it listens on 127.0.0.1 and requires a secret token that the add-on generates). That data can include tab URLs and titles, page content, screenshots, bookmarks, history, downloads and cookies for a tab. The helper sends data only when one of those programs asks for it.
 

@@ -1,4 +1,4 @@
-/* Firefox MCP Bridge — toolbar popup logic (plain classic script). */
+/* WebMCP Controller — toolbar popup logic (plain classic script). */
 (function () {
 'use strict';
 

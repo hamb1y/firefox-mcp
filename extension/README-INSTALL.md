@@ -1,4 +1,4 @@
-# Firefox MCP Bridge — install notes
+# WebMCP Controller — install notes
 
 The add-on talks to a small helper app over Firefox **native messaging**.
 Firefox starts the helper itself; the helper serves MCP on

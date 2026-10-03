@@ -1,5 +1,5 @@
 #!/bin/sh
-# Firefox MCP Bridge — helper installer for macOS and Linux.
+# WebMCP Controller — helper installer for macOS and Linux.
 #   curl -fsSL https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.sh | sh
 # Downloads the right firefox-mcp-host binary, checks it, and registers it with Firefox.
 set -eu

@@ -1,5 +1,5 @@
 /**
- * firefox-mcp-host: the native messaging host for the Firefox MCP Bridge add-on.
+ * firefox-mcp-host: the native messaging host for the WebMCP Controller add-on.
  *
  * Two modes, one binary:
  *  - Launched by Firefox (argv = [manifestPath, extensionId], stdin is a pipe):
@@ -260,7 +260,7 @@ function hostManifest(exe: string, extensionId: string): string {
   return JSON.stringify(
     {
       name: NATIVE_HOST_NAME,
-      description: "Firefox MCP Bridge host: serves MCP to your local AI tools",
+      description: "WebMCP Controller host: serves MCP to your local AI tools",
       path: exe,
       type: "stdio",
       allowed_extensions: [extensionId, ...LEGACY_EXTENSION_IDS.filter((id) => id !== extensionId)],
@@ -294,10 +294,10 @@ function install(extensionId: string): void {
     }
   }
 
-  console.error(`\nFirefox MCP Bridge host ${SERVER_VERSION} installed.\n`);
+  console.error(`\nWebMCP Controller host ${SERVER_VERSION} installed.\n`);
   console.error(`  program:  ${exe}`);
   for (const w of written) console.error(`  manifest: ${w}`);
-  console.error(`\nDone. The Firefox MCP Bridge toolbar icon turns green within a few seconds`);
+  console.error(`\nDone. The WebMCP Controller toolbar icon turns green within a few seconds`);
   console.error(`(open its popup to make it instant), then use "Copy MCP config" there.`);
   console.error(`If Firefox was already running an older helper, it switches to this one automatically.\n`);
 }

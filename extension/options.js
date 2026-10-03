@@ -1,4 +1,4 @@
-/* Firefox MCP Bridge — options page logic (plain classic script). */
+/* WebMCP Controller — options page logic (plain classic script). */
 (function () {
 'use strict';
 

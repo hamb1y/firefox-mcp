@@ -18,7 +18,7 @@ cp firefox-mcp-bridge.zip "$OUT/"
 (cd "$OUT" && rm -f SHA256SUMS && sha256sum firefox-mcp-host-* install.sh install.ps1 firefox-mcp-bridge.zip > SHA256SUMS)
 
 NOTES="$(cat <<MD
-Helper app for the **Firefox MCP Bridge** add-on.
+Helper app for the **WebMCP Controller** add-on.
 
 **Windows** — open PowerShell or Command Prompt and paste:
 \`\`\`bat
@@ -41,6 +41,6 @@ MD
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   gh release upload "$TAG" --repo "$REPO" --clobber "$OUT"/*
 else
-  gh release create "$TAG" --repo "$REPO" --title "Firefox MCP Bridge helper $TAG" --notes "$NOTES" "$OUT"/*
+  gh release create "$TAG" --repo "$REPO" --title "WebMCP Controller helper $TAG" --notes "$NOTES" "$OUT"/*
 fi
 echo "[firefox-mcp] released $TAG → https://github.com/$REPO/releases/tag/$TAG"

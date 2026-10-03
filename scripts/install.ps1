@@ -1,4 +1,4 @@
-# Firefox MCP Bridge — helper installer for Windows.
+# WebMCP Controller — helper installer for Windows.
 #   irm https://github.com/hamb1y/firefox-mcp/releases/latest/download/install.ps1 | iex
 # Downloads the right firefox-mcp-host .exe and registers it with Firefox (per user, no admin).
 & {

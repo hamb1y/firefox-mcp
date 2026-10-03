@@ -1,4 +1,4 @@
-# firefox-mcp — full-control Firefox MCP
+# WebMCP Controller (firefox-mcp) — full-control Firefox MCP
 
 Live Firefox (your **current profile, all tabs**) driven by any MCP harness
 (Claude, opencode, Cursor, anything speaking Streamable HTTP). There is no

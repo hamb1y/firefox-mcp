@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
-  "name": "Firefox MCP Bridge",
-  "version": "0.3.2",
+  "name": "WebMCP Controller",
+  "version": "0.3.3",
   "description": "Let your own AI harness (Claude Code, opencode, Cursor…) read and drive this Firefox over MCP, with a live AI cursor. Needs the small companion helper app.",
   "author": "hamb1y",
   "homepage_url": "https://github.com/hamb1y/firefox-mcp",
@@ -58,7 +58,7 @@
     }
   ],
   "browser_action": {
-    "default_title": "Firefox MCP Bridge",
+    "default_title": "WebMCP Controller",
     "default_popup": "popup.html",
     "default_icon": {
       "48": "icons/icon-48.png",

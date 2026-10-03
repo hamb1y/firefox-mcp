@@ -1,4 +1,4 @@
-/* Firefox MCP Bridge — background page.
+/* WebMCP Controller — background page.
  * Plain classic script (no modules). Firefox launches the companion helper
  * (native messaging host "firefox_mcp_bridge") on connectNative(); the helper
  * serves MCP over HTTP to your AI harness and relays tool calls here.
@@ -854,7 +854,7 @@ function updateBadge() {
   try {
     ba.setBadgeText({ text: on ? (update ? '↑' : '') : '!' });
     ba.setBadgeBackgroundColor({ color: update ? '#2563eb' : hostMissing ? '#b45309' : '#c50042' });
-    ba.setTitle({ title: 'Firefox MCP Bridge — ' + why });
+    ba.setTitle({ title: 'WebMCP Controller — ' + why });
   } catch (e) {}
 }
 

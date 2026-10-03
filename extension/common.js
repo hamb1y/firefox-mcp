@@ -1,4 +1,4 @@
-/* Firefox MCP Bridge — helpers shared by popup + options (plain classic script). */
+/* WebMCP Controller — helpers shared by popup + options (plain classic script). */
 (function () {
 'use strict';
 

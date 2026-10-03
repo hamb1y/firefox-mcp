@@ -1,4 +1,4 @@
-/* Firefox MCP Bridge — the "AI cursor": shows the user where the model is
+/* WebMCP Controller — the "AI cursor": shows the user where the model is
  * acting and what it says it's doing. Purely visual: pointer-events are off,
  * so it never intercepts real input.
  *
