@@ -335,8 +335,8 @@ function mouseEvent(type, opts) {
 
 /* ------------------------------------------------------------------ actions */
 
-function doClick(msg) {
-  var el = mustResolve(msg);
+function doClick(msg, target) {
+  var el = target || mustResolve(msg);
   var button = (msg.button || 'left').toLowerCase();
   var btnCode = button === 'middle' ? 1 : (button === 'right' ? 2 : 0);
   try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) {}
@@ -435,33 +435,67 @@ function pressEnter(el) {
   });
 }
 
-function doType(msg) {
+/* The visible text of a field, to tell whether a submit consumed it. */
+function fieldText(el) {
+  if (el.isContentEditable) return (el.innerText || el.textContent || '').trim();
+  return el.value !== undefined ? String(el.value).trim() : '';
+}
+
+/* The send/submit button that belongs to a field: the form's submit button,
+ * or (for chat composers, which are usually contenteditable with no form)
+ * the nearest enabled button labelled like "Send"/"Submit". */
+function findSubmitButton(el) {
+  var form = el.form || el.closest('form');
+  var scopes = [];
+  if (form) scopes.push(form);
+  for (var p = el.parentElement, i = 0; p && i < 8; p = p.parentElement, i++) scopes.push(p);
+  var label = /^(send|submit|post|reply|search|go|ask)\b|send (message|prompt)|submit/i;
+  for (var k = 0; k < scopes.length; k++) {
+    var cands = scopes[k].querySelectorAll('button, [role="button"], input[type="submit"]');
+    for (var j = 0; j < cands.length; j++) {
+      var b = cands[j];
+      if (b.disabled || b.getAttribute('aria-disabled') === 'true' || b === el) continue;
+      var name = (b.getAttribute('aria-label') || b.getAttribute('data-testid') || b.title || b.value || b.textContent || '').trim();
+      if (b.type === 'submit' && form && scopes[k] === form) return b;
+      if (label.test(name) || /send-button|submit-button/i.test(b.getAttribute('data-testid') || '')) return b;
+    }
+  }
+  return null;
+}
+
+/* Submit like a user would: Enter first; if the page ignored it (synthetic
+ * key events are untrusted, and many chat apps only act on trusted ones),
+ * click the send button, then fall back to the form. */
+async function submitField(el) {
+  var before = fieldText(el);
+  var url = location.href;
+  pressEnter(el);
+  await sleep(250);
+  if (location.href !== url || !el.isConnected || fieldText(el) !== before) return 'enter';
+  var btn = findSubmitButton(el);
+  if (btn) { doClick({}, btn); return 'button'; }
+  var form = el.form || el.closest('form');
+  if (form) {
+    try {
+      if (typeof form.requestSubmit === 'function') form.requestSubmit();
+      else form.submit();
+      return 'form';
+    } catch (e) {}
+  }
+  return 'enter';
+}
+
+async function doType(msg) {
   var el = mustResolve(msg);
   var text = (msg.text === undefined || msg.text === null) ? '' : String(msg.text);
   setValue(el, text);
-  if (msg.submit) {
-    if (el.form) {
-      if (typeof el.form.requestSubmit === 'function') {
-        try { el.form.requestSubmit(); } catch (e) {
-          try {
-            if (typeof el.form.submit === 'function') el.form.submit();
-            else pressEnter(el);
-          } catch (e2) { pressEnter(el); }
-        }
-      } else if (typeof el.form.submit === 'function') {
-        try { el.form.submit(); } catch (e) { pressEnter(el); }
-      } else {
-        pressEnter(el);
-      }
-    } else {
-      pressEnter(el);
-    }
-  }
+  var submitted;
+  if (msg.submit) submitted = await submitField(el);
   var r = elToRef.get(el);
-  return { typed: true, ref: (r !== undefined ? r : undefined) };
+  return { typed: true, ref: (r !== undefined ? r : undefined), submitted: submitted };
 }
 
-function doFillForm(msg) {
+async function doFillForm(msg) {
   var fields = msg.fields || [];
   var count = 0;
   fields.forEach(function (f) {
@@ -470,21 +504,16 @@ function doFillForm(msg) {
     setValue(el, (f.value === undefined || f.value === null) ? '' : String(f.value));
     count += 1;
   });
+  var submitted;
   if (msg.submit) {
-    var active = document.activeElement;
-    var form = active && active.form;
-    if (!form) {
-      var first = fields.length ? resolveTarget({ ref: fields[0].ref, selector: fields[0].selector }) : null;
-      form = first && first.form;
+    var last = null;
+    for (var i = fields.length - 1; i >= 0 && !last; i--) {
+      last = resolveTarget({ ref: fields[i].ref, selector: fields[i].selector, generation: msg.generation });
     }
-    if (form) {
-      if (typeof form.requestSubmit === 'function') { try { form.requestSubmit(); } catch (e) {} }
-      else if (typeof form.submit === 'function') { try { form.submit(); } catch (e) {} }
-    } else if (active) {
-      pressEnter(active);
-    }
+    last = last || document.activeElement;
+    if (last) submitted = await submitField(last);
   }
-  return { filled: count };
+  return { filled: count, submitted: submitted };
 }
 
 function doSelect(msg) {
@@ -520,8 +549,13 @@ function doHover(msg) {
 }
 
 function doScroll(msg) {
-  if (msg.to === 'top') { window.scrollTo(0, 0); return { scrolled: true, to: 'top' }; }
-  if (msg.to === 'bottom') { window.scrollTo(0, document.documentElement.scrollHeight); return { scrolled: true, to: 'bottom' }; }
+  if (msg.to === 'top' || msg.to === 'bottom') {
+    var root = document.scrollingElement || document.documentElement;
+    var box0 = root.scrollHeight - root.clientHeight > 20 ? null : mainScroller(true);
+    var top = msg.to === 'top' ? 0 : (box0 || root).scrollHeight;
+    if (box0) box0.scrollTo(box0.scrollLeft, top); else window.scrollTo(window.scrollX, top);
+    return { scrolled: true, to: msg.to };
+  }
   var target = null;
   if (msg.ref !== undefined && msg.ref !== null && msg.ref !== '' || msg.selector) {
     target = resolveTarget(msg);
@@ -531,17 +565,55 @@ function doScroll(msg) {
     return { scrolled: true };
   }
   var dir = String(msg.direction || 'down').toLowerCase();
-  var px = msg.pixels !== undefined ? Number(msg.pixels) : 500;
-  if (!Number.isFinite(px)) px = 500;
-  var dx = 0, dy = 0;
-  if (dir === 'up') dy = -px;
-  else if (dir === 'down') dy = px;
-  else if (dir === 'left') dx = -px;
-  else if (dir === 'right') dx = px;
-  else if (dir === 'top') { window.scrollTo(window.scrollX, 0); return { scrolled: true }; }
-  else if (dir === 'bottom') { window.scrollTo(window.scrollX, document.documentElement.scrollHeight); return { scrolled: true }; }
+  var vertical = dir !== 'left' && dir !== 'right';
+  // Default: most of a screen, so consecutive scrolls overlap a little.
+  var px = msg.pixels !== undefined ? Number(msg.pixels) : Math.round((vertical ? window.innerHeight : window.innerWidth) * 0.8);
+  if (!Number.isFinite(px) || px <= 0) px = 500;
+  var sign = (dir === 'up' || dir === 'left') ? -1 : 1;
+  var dx = vertical ? 0 : sign * px, dy = vertical ? sign * px : 0;
+  var sx = window.scrollX, sy = window.scrollY;
   window.scrollBy(dx, dy);
-  return { scrolled: true, x: window.scrollX, y: window.scrollY };
+  if (window.scrollX !== sx || window.scrollY !== sy) {
+    return { scrolled: true, x: window.scrollX, y: window.scrollY, atEnd: atEnd(document.scrollingElement || document.documentElement, sign, vertical) };
+  }
+  // The window didn't move: apps like chat UIs scroll an inner container.
+  var box = mainScroller(vertical);
+  if (!box) return { scrolled: false, x: sx, y: sy, atEnd: true };
+  var bx = box.scrollLeft, by = box.scrollTop;
+  box.scrollBy(dx, dy);
+  return {
+    scrolled: box.scrollLeft !== bx || box.scrollTop !== by,
+    container: describe(box),
+    x: box.scrollLeft, y: box.scrollTop,
+    atEnd: atEnd(box, sign, vertical)
+  };
+}
+
+function atEnd(box, sign, vertical) {
+  if (vertical) return sign > 0 ? box.scrollTop + box.clientHeight >= box.scrollHeight - 2 : box.scrollTop <= 0;
+  return sign > 0 ? box.scrollLeft + box.clientWidth >= box.scrollWidth - 2 : box.scrollLeft <= 0;
+}
+
+/* The largest visible element that can scroll on the given axis. */
+function mainScroller(vertical) {
+  var best = null, bestArea = 0;
+  var all = document.querySelectorAll('*');
+  for (var i = 0; i < all.length; i++) {
+    var e = all[i];
+    var room = vertical ? e.scrollHeight - e.clientHeight : e.scrollWidth - e.clientWidth;
+    if (room < 20) continue;
+    var ov = getComputedStyle(e)[vertical ? 'overflowY' : 'overflowX'];
+    if (ov !== 'auto' && ov !== 'scroll' && ov !== 'overlay') continue;
+    var area = e.clientWidth * e.clientHeight;
+    if (area > bestArea) { best = e; bestArea = area; }
+  }
+  return best;
+}
+
+function describe(el) {
+  var r = elToRef.get(el);
+  if (r !== undefined) return 'ref=' + r;
+  return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '');
 }
 
 function doKey(msg) {

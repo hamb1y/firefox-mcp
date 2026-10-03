@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "firefox-mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Firefox MCP: WebExtension + native messaging host that serves MCP over HTTP to any harness",
   "type": "module",
   "workspaces": [

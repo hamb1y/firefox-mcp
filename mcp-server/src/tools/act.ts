@@ -77,7 +77,7 @@ export function registerActTools(
         ref: refField,
         selector: selectorField,
         text: z.string().describe("Text to type"),
-        submit: z.boolean().optional().describe("Press Enter after typing"),
+        submit: z.boolean().optional().describe("Submit after typing: presses Enter, and if the page ignores it, clicks the nearby Send/Submit button or submits the form. Result says which worked."),
       },
     },
     async (args) => {
@@ -175,13 +175,15 @@ export function registerActTools(
   server.registerTool(
     "act_scroll",
     {
-      description: "Scroll the page or an element (direction/pixels, or jump to top/bottom).",
+      description:
+        "Scroll the page (direction + pixels, default ~80% of the viewport), jump to top/bottom, or scroll ref/selector into view. Falls back to the page's main inner scroller (chat apps etc.) when the window itself can't scroll. Returns atEnd when there's nothing further.",
       inputSchema: {
         tabId: tabIdField,
         ref: refField,
         selector: selectorField,
         direction: z.enum(["up", "down", "left", "right"]).optional().describe("Scroll direction"),
-        pixels: z.number().int().positive().optional().describe("Pixels to scroll"),
+        pixels: z.number().int().positive().optional().describe("Pixels to scroll (default ~80% of the viewport)"),
+        amount: z.number().int().positive().optional().describe("Alias for pixels"),
         to: z.enum(["top", "bottom"]).optional().describe("Jump to top or bottom instead"),
       },
     },
@@ -192,7 +194,7 @@ export function registerActTools(
           ref: args.ref,
           selector: args.selector,
           direction: args.direction,
-          pixels: args.pixels,
+          pixels: args.pixels ?? args.amount,
           to: args.to,
         }),
       ),
