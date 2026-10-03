@@ -1,0 +1,72 @@
+{
+  "manifest_version": 2,
+  "name": "Firefox MCP Bridge",
+  "version": "0.3.0",
+  "description": "Let your own AI harness (Claude Code, opencode, Cursor…) read and drive this Firefox over MCP, with a live AI cursor. Needs the small companion helper app.",
+  "author": "hamb1y",
+  "homepage_url": "https://github.com/hamb1y/firefox-mcp",
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "firefox-mcp@hamb1y.github.io",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": [
+          "browsingActivity",
+          "websiteContent",
+          "websiteActivity",
+          "bookmarksInfo"
+        ],
+        "optional": [
+          "technicalAndInteraction"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "nativeMessaging",
+    "bookmarks",
+    "history",
+    "downloads",
+    "sessions",
+    "cookies",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/cursor.js",
+        "content/ax.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "browser_action": {
+    "default_title": "Firefox MCP Bridge",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

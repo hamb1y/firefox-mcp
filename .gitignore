@@ -1,0 +1,8 @@
+node_modules/
+*/dist/
+*.zip
+.env
+*.log
+dist/
+*.tsbuildinfo
+web-ext-artifacts/

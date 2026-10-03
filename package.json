@@ -1,0 +1,21 @@
+{
+  "private": true,
+  "name": "firefox-mcp",
+  "version": "0.3.0",
+  "description": "Firefox MCP: WebExtension + native messaging host that serves MCP over HTTP to any harness",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "mcp-server"
+  ],
+  "scripts": {
+    "build": "npm run build -w @firefox-mcp/shared && npm run build -w @firefox-mcp/mcp-server",
+    "build:shared": "npm run build -w @firefox-mcp/shared",
+    "build:server": "npm run build -w @firefox-mcp/mcp-server",
+    "typecheck": "tsc --noEmit -p mcp-server/tsconfig.json",
+    "build:host": "bash scripts/build-host.sh",
+    "install-host": "npm run build && node mcp-server/dist/host.js install",
+    "release": "bash scripts/release.sh"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@firefox-mcp/shared",
+  "version": "0.3.0",
+  "type": "module",
+  "main": "dist/protocol.js",
+  "types": "dist/protocol.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "license": "MIT"
+}
