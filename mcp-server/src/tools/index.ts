@@ -13,7 +13,7 @@ import { registerTabTools } from "./tabs.js";
 import { registerUnderstandTools } from "./understand.js";
 import { registerActTools } from "./act.js";
 import { registerBrowserTools } from "./browser.js";
-import { withThought } from "../bridge/thought.js";
+import { withSignal, withThought } from "../bridge/thought.js";
 
 /** Tools that don't touch a page, so a thought has nowhere to show. */
 const NO_THOUGHT = new Set(["extension_status", "wait_for_tab_event", "cursor_note"]);
@@ -34,15 +34,18 @@ export const SERVER_INSTRUCTIONS =
 
 /**
  * Give every page-touching tool an optional `thought` and run its handler with
- * that thought in scope, so the bridge forwards it to the extension.
+ * that thought in scope, so the bridge forwards it to the extension. Every
+ * handler also runs with the request's cancellation signal in scope.
  */
 function addThoughts(server: McpServer): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const register = server.registerTool.bind(server) as (name: string, config: any, cb: any) => unknown;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (server as any).registerTool = (name: string, config: any, cb: any) => {
+    const signalOf = (extra: unknown): AbortSignal | undefined => (extra as { signal?: AbortSignal } | undefined)?.signal;
     if (NO_THOUGHT.has(name) || !config?.inputSchema || typeof config.inputSchema !== "object") {
-      return register(name, config, cb);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return register(name, config, (args: any, extra: unknown) => withSignal(signalOf(extra), () => cb(args, extra)));
     }
     return register(
       name,
@@ -50,7 +53,9 @@ function addThoughts(server: McpServer): void {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (args: any, extra: unknown) => {
         const { thought, ...rest } = args ?? {};
-        return withThought(typeof thought === "string" ? thought.trim() : undefined, () => cb(rest, extra));
+        return withSignal(signalOf(extra), () =>
+          withThought(typeof thought === "string" ? thought.trim() : undefined, () => cb(rest, extra)),
+        );
       },
     );
   };
@@ -96,16 +101,19 @@ export function registerFirefoxTools(
         tabId: tabIdField,
       },
     },
-    async (args) => ({
-      content: [{ type: "text" as const, text: await callBridge(bridge, "cursor.say", { note: args.note, tabId: args.tabId }) }],
-    }),
+    async (args) => {
+      const text = await callBridge(bridge, "cursor.say", { note: args.note, tabId: args.tabId });
+      return { content: [{ type: "text" as const, text }], ...(text.startsWith("ERROR") ? { isError: true } : {}) };
+    },
   );
 
   server.registerTool(
     "wait_for_tab_event",
     {
       description:
-        "Wait for an extension-pushed event (tab updated/removed/activated, download done), optionally filtered to one tab.",
+        "Wait for an extension-pushed event (tab updated/removed/activated, download done), optionally filtered to one tab. " +
+        "By default only events arriving after the call count. Each result has a `seq`; pass it back as `afterSeq` " +
+        "to also catch events that happened between calls (the last 200 are buffered).",
       inputSchema: {
         types: z
           .array(z.enum(["tab.updated", "tab.removed", "tab.activated", "download.done"]))
@@ -119,6 +127,12 @@ export function registerFirefoxTools(
           .max(120000)
           .optional()
           .describe("How long to wait in ms (default 15000, max 120000)"),
+        afterSeq: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Also match buffered events with seq greater than this (from a previous result)"),
       },
     },
     async (args) => {
@@ -126,7 +140,7 @@ export function registerFirefoxTools(
       const predicate = (e: BridgeEvent): boolean =>
         args.tabId === undefined || e.data["tabId"] === args.tabId;
       try {
-        const evt = await bridge.waitForEvent(args.types, predicate, timeoutMs);
+        const evt = await bridge.waitForEvent(args.types, predicate, timeoutMs, { afterSeq: args.afterSeq });
         return { content: [{ type: "text" as const, text: fmt(evt) }] };
       } catch (e) {
         const { code, message } = toBridgeError(e);

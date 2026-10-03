@@ -49,7 +49,13 @@ function connectNative(name) {
 // Fake content script: records what the background sends to the page.
 const sent = [];
 const shotLog = [];
-const TAB = { id: 7, windowId: 1, index: 0, url: "https://example.com/", title: "Example", active: true, status: "complete" };
+const TAB = { id: 7, windowId: 1, index: 0, url: "https://example.com/", title: "Example", active: true, status: "complete", cookieStoreId: "firefox-container-2" };
+const cookieQueries = [];
+const COOKIES = [
+  { name: "plain", value: "1", domain: "example.com" },
+  { name: "chips-here", value: "2", domain: "cdn.test", partitionKey: { topLevelSite: "https://example.com" } },
+  { name: "chips-elsewhere", value: "3", domain: "cdn.test", partitionKey: { topLevelSite: "https://other.test" } },
+];
 const onMsg = ev();
 const browser = {
   runtime: {
@@ -62,14 +68,16 @@ const browser = {
     sendMessage: async (tabId, msg) => {
       sent.push(JSON.parse(JSON.stringify(msg)));
       if (msg.kind === "cursor") shotLog.push(msg.op);
+      if (msg.kind === "act-wait") return new Promise(() => {}); // until cancelled
       return { __fxmcp: true, ok: true, result: msg.kind === "cursor" ? { ok: true, shown: true } : { clicked: true } };
     },
     captureVisibleTab: async () => { shotLog.push("capture"); return "data:image/png;base64,AAAA"; },
     onUpdated: ev(), onRemoved: ev(), onActivated: ev(),
   },
+  cookies: { getAll: async (q) => { cookieQueries.push(JSON.parse(JSON.stringify(q))); return COOKIES; } },
   downloads: { onChanged: ev() }, browserAction: { setBadgeText() {}, setBadgeBackgroundColor() {}, setTitle() {} },
 };
-const ctx = vm.createContext({ browser, console: { log() {} }, setTimeout, clearTimeout, setInterval, crypto: globalThis.crypto, Promise, Uint8Array, URL });
+const ctx = vm.createContext({ browser, console: { log() {} }, setTimeout, clearTimeout, setInterval, crypto: globalThis.crypto, Promise, Uint8Array, URL, AbortController, AbortSignal });
 vm.runInContext(fs.readFileSync(path.join(root, "extension/background.js"), "utf8"), ctx);
 const ask = (m) => Promise.all(onMsg.l.map((f) => f(m, {}))).then((r) => r.find((x) => x !== undefined));
 const waitFor = async (pred, ms = 5000) => {
@@ -155,6 +163,24 @@ m = sent.find((x) => x.kind === "act-click");
 check("no cursor when turned off", m && !m.cursor);
 await ask({ type: "set-config", showCursor: true });
 
+r = await tool("cookies_for_tab", {});
+check("cookies come from the tab's container", cookieQueries.at(-1)?.storeId === "firefox-container-2", JSON.stringify(cookieQueries.at(-1)));
+check("cookies include ones partitioned under this site only", /chips-here/.test(text(r)) && /plain/.test(text(r)) && !/chips-elsewhere/.test(text(r)), text(r));
+
+sent.length = 0;
+const ac = new AbortController();
+const waiting = fetch(st.url, {
+  method: "POST", signal: ac.signal,
+  headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer " + st.token },
+  body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "act_wait", arguments: { text: "never" } } }),
+}).catch(() => "aborted");
+for (let t = 0; t < 3000 && !sent.some((x) => x.kind === "act-wait"); t += 50) await sleep(50);
+ac.abort();
+await waiting;
+const opId = sent.find((x) => x.kind === "act-wait")?.opId;
+for (let t = 0; t < 3000 && !sent.some((x) => x.kind === "cancel"); t += 50) await sleep(50);
+check("cancelling act_wait stops the wait in the page", !!opId && sent.some((x) => x.kind === "cancel" && x.opId === opId), JSON.stringify(sent.map((x) => x.kind)));
+
 const old = st.token;
 st = await ask({ type: "regenerate-token" });
 check("old token rejected after regenerate", (await mcp("tools/call", { name: "tabs_list", arguments: {} }, old)).status === 401);
@@ -166,6 +192,11 @@ await ask({ type: "set-config", port: port2, bind: "127.0.0.1" });
 st = await waitFor((s) => s.listening && s.url.includes(":" + port2));
 check("port change", st.url.includes(":" + port2) && (await tool("tabs_list")).status === 200, st.url);
 check("bad port rejected", !!(await ask({ type: "set-config", port: 80 })).error);
+
+const quick = [PORT + 62, PORT + 63, PORT + 64];
+await Promise.all(quick.map((p) => ask({ type: "set-config", port: p })));
+st = await waitFor((s) => s.listening && s.url.includes(":" + quick[2]));
+check("rapid port changes end on the last one", st.url.includes(":" + quick[2]) && (await tool("tabs_list")).status === 200, st.url);
 
 await ask({ type: "reconnect" });
 st = await waitFor((s) => s.listening && s.connectedAt);

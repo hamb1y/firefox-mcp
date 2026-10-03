@@ -23,8 +23,9 @@ function errText(e: unknown) {
 }
 
 const REF_HINT =
-  "Note: [ref=N] element refs are valid for the current snapshot generation only. " +
-  "If the page may have changed, take a fresh snapshot before acting.";
+  "Note: a [ref=N] keeps pointing at the same element until the page navigates, and is never reused for a different one. " +
+  "Pass this generation with act_* calls so a ref from an older page load is refused instead of guessed. " +
+  "If an action fails with REF_STALE/REF_NOT_FOUND, take a fresh snapshot.";
 
 const maxCharsField = z
   .number()

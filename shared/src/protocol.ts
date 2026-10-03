@@ -19,7 +19,10 @@
  * older side. Product versions (VERSION) may differ freely within a PROTOCOL.
  *
  * Timeouts: server waits CMD_TIMEOUT_MS (30s) per command, then rejects.
- * Refs: AX snapshot refs are stable only within one `generation` id.
+ * Refs: an AX snapshot ref names one element for the life of the document and
+ * is never reused. Passing the snapshot's `generation` with an action makes the
+ * extension refuse refs from a different page load (REF_STALE).
+ * Cancel: the host may send `{cancel: id}` to abandon a pending command.
  */
 
 // ---------------------------------------------------------------- hello ---
@@ -115,11 +118,16 @@ export interface BridgeEvent {
   data: Record<string, unknown>;
 }
 
-export type WireMessage = BridgeCommand | BridgeResponse | BridgeEvent | HelloMessage;
+/** Host → extension: stop working on command `cancel` (its response is ignored). */
+export interface CancelMessage {
+  cancel: string;
+}
+
+export type WireMessage = BridgeCommand | BridgeResponse | BridgeEvent | HelloMessage | CancelMessage;
 
 // ------------------------------------------------------------ ax snapshot ---
 
-/** One node of the accessibility snapshot. `ref` is 1-based within a generation. */
+/** One node of the accessibility snapshot. `ref` is unique within the document. */
 export interface AxNode {
   ref: number;
   role: string;
@@ -135,7 +143,7 @@ export interface AxNode {
 }
 
 export interface AxSnapshot {
-  generation: string; // uuid — refs valid only for this generation
+  generation: string; // identifies the page load this snapshot came from
   url: string;
   title: string;
   truncated: boolean;
@@ -170,11 +178,14 @@ export interface WindowInfo {
 
 // ---------------------------------------------------------------- errors ---
 
+/** Firefox rejects native messages from the host larger than this. */
+export const MAX_HOST_MESSAGE_BYTES = 1024 * 1024;
+
 export const BRIDGE_ERRORS = {
   NO_CONTENT_SCRIPT: "NO_CONTENT_SCRIPT", // page has no injected script (chrome://, about:, AMO)
   RESTRICTED_PAGE: "RESTRICTED_PAGE", // scripting forbidden by Firefox
-  REF_STALE: "REF_STALE", // snapshot generation mismatch
-  REF_NOT_FOUND: "REF_NOT_FOUND", // ref id unknown in generation
+  REF_STALE: "REF_STALE", // ref/generation from another page load, or element removed
+  REF_NOT_FOUND: "REF_NOT_FOUND", // ref id unknown on this page
   TAB_NOT_FOUND: "TAB_NOT_FOUND",
   INVALID_PARAMS: "INVALID_PARAMS", // missing/malformed command params
   UNKNOWN_METHOD: "UNKNOWN_METHOD", // no such bridge method
@@ -183,6 +194,12 @@ export const BRIDGE_ERRORS = {
   TIMEOUT: "TIMEOUT",
   NOT_CONNECTED: "NOT_CONNECTED",
   EXTENSION_BUSY: "EXTENSION_BUSY", // another harness holds the extension lock
+  ELEMENT_DISABLED: "ELEMENT_DISABLED", // target is disabled
+  NOT_EDITABLE: "NOT_EDITABLE", // target can't take typed text (button, read-only…)
+  NO_MATCH: "NO_MATCH", // no <option> matches the requested value
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE", // command exceeds the native-messaging limit
+  CANCELLED: "CANCELLED", // the MCP client cancelled the request
+  PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH", // add-on and helper speak different PROTOCOLs
 } as const;
 
 // ----------------------------------------------------------- host config ---

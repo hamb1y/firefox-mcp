@@ -22,6 +22,7 @@ jobs:
       - run: node scripts/set-version.mjs --check "${GITHUB_REF_NAME#v}"
       - run: npm run build
       - run: node test/e2e.mjs
+      - run: node test/host.mjs
       - run: npm run release
         env:
           GH_TOKEN: ${{ github.token }}

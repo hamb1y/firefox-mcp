@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "WebMCP Controller",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Let your own AI harness (Claude Code, opencode, Cursor…) read and drive this Firefox over MCP, with a live AI cursor. Needs the small companion helper app.",
   "author": "hamb1y",
   "homepage_url": "https://github.com/hamb1y/webmcp-controller",
@@ -61,6 +61,8 @@
     "default_title": "WebMCP Controller",
     "default_popup": "popup.html",
     "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
       "48": "icons/icon-48.png",
       "96": "icons/icon-96.png"
     }

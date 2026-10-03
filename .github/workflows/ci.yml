@@ -20,3 +20,6 @@ jobs:
       - run: npx -y web-ext@8 lint -s extension
       - run: node test/e2e.mjs
       - run: MISSING=1 node test/e2e.mjs
+      - run: node test/host.mjs
+      - run: npx playwright install --with-deps firefox
+      - run: node test/content.mjs

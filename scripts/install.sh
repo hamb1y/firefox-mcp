@@ -50,13 +50,18 @@ fetch() {
 echo "Downloading $name ..."
 fetch "$BASE/$name" "$tmp/$name"
 
-if fetch "$BASE/SHA256SUMS" "$tmp/SHA256SUMS" 2>/dev/null; then
-  want="$(grep " $name\$" "$tmp/SHA256SUMS" | cut -d' ' -f1 || true)"
-  if command -v sha256sum >/dev/null 2>&1; then got="$(sha256sum "$tmp/$name" | cut -d' ' -f1)"
-  else got="$(shasum -a 256 "$tmp/$name" | cut -d' ' -f1)"; fi
-  if [ -n "$want" ] && [ "$want" != "$got" ]; then
-    echo "Checksum mismatch for $name — download corrupted, try again." >&2; exit 1
-  fi
+# Refuse to run anything we can't verify.
+if ! fetch "$BASE/SHA256SUMS" "$tmp/SHA256SUMS" 2>/dev/null; then
+  echo "Couldn't download SHA256SUMS to verify $name. Not installing." >&2; exit 1
+fi
+want="$(awk -v n="$name" '$2 == n || $2 == "*" n { print tolower($1); exit }' "$tmp/SHA256SUMS")"
+if [ -z "$want" ]; then
+  echo "SHA256SUMS has no entry for $name. Not installing." >&2; exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then got="$(sha256sum "$tmp/$name" | cut -d' ' -f1)"
+else got="$(shasum -a 256 "$tmp/$name" | cut -d' ' -f1)"; fi
+if [ "$want" != "$got" ]; then
+  echo "Checksum mismatch for $name — download corrupted or tampered with. Not installing." >&2; exit 1
 fi
 
 chmod +x "$tmp/$name"

@@ -59,6 +59,7 @@ var hostStatus = null;     // last { hostStatus } from the helper
 var hostRestarting = false; // helper said it's exiting to make way for an updated binary
 var lastError = '';        // human-readable reason for the popup/options page
 var connectedAt = 0;
+var inflight = new Map();  // command id -> AbortController, for { cancel: id }
 var cmdCount = 0;
 var platform = { os: '', arch: '' };
 
@@ -307,28 +308,60 @@ async function hideCursors() {
   } catch (e) {}
 }
 
-/* Resolve true once the tab reports status=complete, false on timeout. */
-function waitForTabLoad(tabId, timeoutMs) {
-  return new Promise(function (resolve) {
-    var done = false;
-    function finish(v) {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      try { B.tabs.onUpdated.removeListener(onUpd); } catch (e) {}
-      resolve(v);
-    }
+/* Resolve true once a tab finishes loading, false on timeout or abort.
+ * The listener goes on before the navigation starts (so no event is missed);
+ * call start(tabId) once the tab id is known. Events seen before that are
+ * buffered. With checkNow, a tab that is already complete counts (used for new
+ * tabs, which have no previous page whose 'complete' could be mistaken). */
+function tabLoadWaiter(timeoutMs, signal, wantUrl) {
+  var tabId = null, buffered = [], sawLoading = false, done = false, resolveFn;
+  var promise = new Promise(function (r) { resolveFn = r; });
+  var wantBlank = /^about:blank/i.test(String(wantUrl || ''));
+  function finish(v) {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    try { B.tabs.onUpdated.removeListener(onUpd); } catch (e) {}
+    if (signal) signal.removeEventListener('abort', onAbort);
+    resolveFn(v);
+  }
+  // A new tab passes through about:blank; that 'complete' isn't the page we want.
+  function placeholder(tab) {
+    return !wantBlank && tab && /^about:blank/i.test(String(tab.url || ''));
+  }
+  function consider(info, tab) {
     // Ignore the 'complete' of the page we're navigating away from: require a
     // 'loading' first, or a URL change, before accepting 'complete'.
-    var sawLoading = false;
-    function onUpd(id, info) {
-      if (id !== tabId || !info) return;
-      if (info.status === 'loading' || info.url) sawLoading = true;
-      if (info.status === 'complete' && sawLoading) finish(true);
-    }
-    var timer = setTimeout(function () { finish(false); }, Math.max(1000, timeoutMs));
-    B.tabs.onUpdated.addListener(onUpd);
-  });
+    if (info.status === 'loading' || info.url) sawLoading = true;
+    if (info.status === 'complete' && sawLoading && !placeholder(tab)) finish(true);
+  }
+  function onUpd(id, info, tab) {
+    if (done || !info) return;
+    if (tabId === null) { buffered.push([id, info, tab]); return; }
+    if (id === tabId) consider(info, tab);
+  }
+  function onAbort() { finish(false); }
+  var timer = setTimeout(function () { finish(false); }, Math.max(1000, timeoutMs));
+  B.tabs.onUpdated.addListener(onUpd);
+  if (signal) {
+    if (signal.aborted) finish(false);
+    else signal.addEventListener('abort', onAbort);
+  }
+  return {
+    promise: promise,
+    start: function (id, checkNow) {
+      tabId = id;
+      var early = buffered;
+      buffered = [];
+      early.forEach(function (e) { if (!done && e[0] === id) consider(e[1], e[2]); });
+      if (checkNow && !done) {
+        call(B.tabs, 'get', id).then(function (t) {
+          if (t && t.status === 'complete' && !placeholder(t)) finish(true);
+        }).catch(function () {});
+      }
+    },
+    cancel: function () { finish(false); }
+  };
 }
 
 /* ---------------------------------------------------------------- handlers */
@@ -366,20 +399,28 @@ var handlers = {
   },
 
   /* ---- tab management ---- */
-  'tab.create': async function (p) {
+  'tab.create': async function (p, ctx) {
     var details = {};
     if (p.url !== undefined) details.url = String(p.url);
     if (p.active !== undefined) details.active = !!p.active;
-    var created = await call(B.tabs, 'create', details);
-    if (details.url && p.waitForLoad) {
-      var ok = await waitForTabLoad(created.id, num(p.timeoutMs, 20000));
+    var waiter = details.url && p.waitForLoad ? tabLoadWaiter(num(p.timeoutMs, 20000), ctx.signal, details.url) : null;
+    var created;
+    try {
+      created = await call(B.tabs, 'create', details);
+    } catch (e) {
+      if (waiter) waiter.cancel();
+      throw e;
+    }
+    if (waiter) {
+      waiter.start(created.id, true);
+      var ok = await waiter.promise;
       var info = toTabInfo(await call(B.tabs, 'get', created.id));
       info.loadComplete = ok;
       return info;
     }
     return toTabInfo(created);
   },
-  'tab.update': async function (p) {
+  'tab.update': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
     var props = {};
     if (p.url !== undefined) props.url = String(p.url);
@@ -387,9 +428,15 @@ var handlers = {
     if (p.pinned !== undefined) props.pinned = !!p.pinned;
     var updated = tab;
     if (props.url !== undefined && p.waitForLoad) {
-      var loaded = waitForTabLoad(tab.id, num(p.timeoutMs, 20000));
-      await call(B.tabs, 'update', tab.id, props);
-      var ok = await loaded;
+      var loaded = tabLoadWaiter(num(p.timeoutMs, 20000), ctx.signal, props.url);
+      loaded.start(tab.id, false);
+      try {
+        await call(B.tabs, 'update', tab.id, props);
+      } catch (e) {
+        loaded.cancel();
+        throw e;
+      }
+      var ok = await loaded.promise;
       var info = toTabInfo(await call(B.tabs, 'get', tab.id));
       info.loadComplete = ok;
       return info;
@@ -554,13 +601,13 @@ var handlers = {
   'act.click': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-click', ref: p.ref, selector: p.selector, button: p.button || 'left' });
+    return await sendToTab(tab.id, p, { kind: 'act-click', ref: p.ref, selector: p.selector, generation: p.generation, button: p.button || 'left' });
   },
   'act.type': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
     return await sendToTab(tab.id, p, {
-      kind: 'act-type', ref: p.ref, selector: p.selector,
+      kind: 'act-type', ref: p.ref, selector: p.selector, generation: p.generation,
       text: (p.text === undefined || p.text === null) ? '' : String(p.text),
       submit: !!p.submit
     });
@@ -569,27 +616,27 @@ var handlers = {
     if (!Array.isArray(p.fields)) throw be('INVALID_PARAMS', 'act.fillForm requires fields[]');
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-fillForm', fields: p.fields, submit: !!p.submit });
+    return await sendToTab(tab.id, p, { kind: 'act-fillForm', fields: p.fields, generation: p.generation, submit: !!p.submit });
   },
   'act.select': async function (p) {
     if (!Array.isArray(p.values)) throw be('INVALID_PARAMS', 'act.select requires values[]');
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
     return await sendToTab(tab.id, p, {
-      kind: 'act-select', ref: p.ref, selector: p.selector,
+      kind: 'act-select', ref: p.ref, selector: p.selector, generation: p.generation,
       values: p.values.map(String)
     });
   },
   'act.hover': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-hover', ref: p.ref, selector: p.selector });
+    return await sendToTab(tab.id, p, { kind: 'act-hover', ref: p.ref, selector: p.selector, generation: p.generation });
   },
   'act.scroll': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
     return await sendToTab(tab.id, p, {
-      kind: 'act-scroll', ref: p.ref, selector: p.selector,
+      kind: 'act-scroll', ref: p.ref, selector: p.selector, generation: p.generation,
       direction: p.direction, pixels: p.pixels, to: p.to
     });
   },
@@ -601,13 +648,21 @@ var handlers = {
     assertContentAllowed(tab);
     return await sendToTab(tab.id, p, { kind: 'act-key', key: String(p.key), modifiers: p.modifiers });
   },
-  'act.wait': async function (p) {
+  'act.wait': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, {
-      kind: 'act-wait', text: p.text, selector: p.selector,
-      timeoutMs: num(p.timeoutMs, 10000)
-    });
+    var stop = function () {
+      call(B.tabs, 'sendMessage', tab.id, { kind: 'cancel', opId: ctx.id }).catch(function () {});
+    };
+    ctx.signal.addEventListener('abort', stop);
+    try {
+      return await sendToTab(tab.id, p, {
+        kind: 'act-wait', text: p.text, selector: p.selector, opId: ctx.id,
+        timeoutMs: num(p.timeoutMs, 10000)
+      });
+    } finally {
+      ctx.signal.removeEventListener('abort', stop);
+    }
   },
   'act.find': async function (p) {
     if (p.query === undefined || p.query === null || String(p.query) === '') {
@@ -653,7 +708,34 @@ var handlers = {
     var tab = await resolveTab(p.tabId);
     var url = String(tab.url || '');
     if (!/^https?:/i.test(url)) return [];
-    return await call(B.cookies, 'getAll', { url: url.split('#')[0] });
+    // The tab's own cookie jar (containers, private windows), across first-party
+    // isolation, including cookies partitioned under this site (CHIPS / Total
+    // Cookie Protection). Older Firefox lacks some keys; drop them and retry.
+    var q = { url: url.split('#')[0], firstPartyDomain: null, partitionKey: {} };
+    if (tab.cookieStoreId) q.storeId = tab.cookieStoreId;
+    var cookies;
+    for (var attempt = 0; ; attempt++) {
+      try {
+        cookies = await call(B.cookies, 'getAll', q);
+        break;
+      } catch (e) {
+        if (attempt === 0 && 'partitionKey' in q) { delete q.partitionKey; continue; }
+        if (attempt <= 1 && 'firstPartyDomain' in q) { delete q.firstPartyDomain; continue; }
+        throw e;
+      }
+    }
+    var host = '';
+    try { host = new URL(url).hostname; } catch (e) {}
+    return (cookies || []).filter(function (c) {
+      var site = c.partitionKey && c.partitionKey.topLevelSite;
+      if (!site) return true;
+      try {
+        var h = new URL(site).hostname;
+        return host === h || host.endsWith('.' + h);
+      } catch (e) {
+        return false;
+      }
+    });
   },
   'sessions.recentlyClosed': async function (p) {
     return await call(B.sessions, 'getRecentlyClosed', { maxResults: num(p.limit, 10) });
@@ -664,12 +746,12 @@ var handlers = {
   }
 };
 
-async function onCommand(cmd) {
+async function onCommand(cmd, ctx) {
   var handler = handlers[cmd.method];
   if (!handler) throw be('UNKNOWN_METHOD', 'Unknown method: ' + cmd.method);
   var params = (cmd.params && typeof cmd.params === 'object') ? cmd.params : {};
   cmdCount += 1;
-  var result = await handler(params);
+  var result = await handler(params, ctx);
   noteAfter(cmd.method, params);
   return result;
 }
@@ -700,12 +782,27 @@ async function handleIncoming(msg) {
     log('helper exiting: ' + (msg.hostExit.reason || '?'));
     return;
   }
+  if (typeof msg.cancel === 'string') {
+    // The helper gave up on a command (client cancelled or disconnected).
+    var ctl = inflight.get(msg.cancel);
+    if (ctl) ctl.abort();
+    return;
+  }
   if (msg.id !== undefined && typeof msg.method === 'string') {
+    var cs = compat().state;
+    if (cs === 'helper-old' || cs === 'addon-old') {
+      send({ id: msg.id, ok: false, error: { code: 'PROTOCOL_MISMATCH', message: lastError } });
+      return;
+    }
+    var ac = new AbortController();
+    inflight.set(msg.id, ac);
     try {
-      var result = await onCommand(msg);
+      var result = await onCommand(msg, { id: String(msg.id), signal: ac.signal });
       send({ id: msg.id, ok: true, result: result === undefined ? null : result });
     } catch (e) {
       send({ id: msg.id, ok: false, error: toBridgeError(e) });
+    } finally {
+      inflight.delete(msg.id);
     }
   }
 }
@@ -729,6 +826,7 @@ function reconnectNow() {
   if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
   var old = port;
   port = null;
+  connectedAt = 0;
   if (old) { try { old.disconnect(); } catch (e) {} }
   connect();
 }
@@ -785,6 +883,7 @@ function connect() {
     return;
   }
   port = p;
+  connectedAt = 0;
   hostStatus = null;
   lastError = '';
   p.onMessage.addListener(function (msg) {
@@ -935,7 +1034,9 @@ function validPort(v) {
 function validBind(v) {
   var s = String(v || '').trim();
   if (s === 'localhost') return '127.0.0.1';
-  return /^(\d{1,3}\.){3}\d{1,3}$/.test(s) || s === '::' || s === '::1' ? s : '';
+  if (s === '::' || s === '::1') return s;
+  var parts = s.split('.');
+  return parts.length === 4 && parts.every(function (o) { return /^\d{1,3}$/.test(o) && Number(o) <= 255; }) ? s : '';
 }
 
 async function loadConfig() {
@@ -1010,17 +1111,14 @@ if (B.runtime && B.runtime.onMessage) {
       return sleep(400).then(statusSnapshot);
     }
     if (type === 'set-config') {
+      // Validate everything before changing anything, so a bad field can't leave half a config applied.
       var data = {};
-      if (msg.port !== undefined) {
-        var p = validPort(msg.port);
-        if (!p) return Promise.resolve({ error: 'Port must be a number between 1024 and 65535' });
-        CFG.port = data.mcpPort = p;
-      }
-      if (msg.bind !== undefined) {
-        var b = validBind(msg.bind);
-        if (!b) return Promise.resolve({ error: 'Bind address must be an IP like 127.0.0.1 or 0.0.0.0' });
-        CFG.bind = data.mcpBind = b;
-      }
+      var p = msg.port !== undefined ? validPort(msg.port) : 0;
+      if (msg.port !== undefined && !p) return Promise.resolve({ error: 'Port must be a number between 1024 and 65535' });
+      var b = msg.bind !== undefined ? validBind(msg.bind) : '';
+      if (msg.bind !== undefined && !b) return Promise.resolve({ error: 'Bind address must be an IP like 127.0.0.1 or 0.0.0.0' });
+      if (p) CFG.port = data.mcpPort = p;
+      if (b) CFG.bind = data.mcpBind = b;
       if (typeof msg.allowWsl === 'boolean') CFG.allowWsl = data.mcpAllowWsl = msg.allowWsl;
       if (typeof msg.confirmDestructive === 'boolean') CFG.confirmDestructive = data.mcpConfirm = msg.confirmDestructive;
       if (typeof msg.showCursor === 'boolean') {

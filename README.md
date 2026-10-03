@@ -1,3 +1,5 @@
+<img src="extension/icons/icon.svg" width="96" height="96" alt="WebMCP Controller logo" align="right">
+
 # WebMCP Controller — full-control Firefox MCP
 
 Live Firefox (your **current profile, all tabs**) driven by any MCP harness
@@ -172,6 +174,9 @@ npm install
 npm run build && npm run typecheck
 node test/e2e.mjs                 # real background.js (mocked browser APIs) + real helper over native messaging and HTTP
 MISSING=1 node test/e2e.mjs       # the "helper not installed" flow
+node test/host.mjs                # helper: reconfiguration, Host/Origin checks, size limits, cancellation, protocol mismatch
+npx playwright install firefox && node test/content.mjs   # real content script in real Firefox
+npm test                          # all of the above
 node test/e2e.mjs dist/host/webmcp-host-linux-x64   # same, against a compiled helper
 npx web-ext@8 lint -s extension
 ```
@@ -243,11 +248,11 @@ Tool names below match `registerTool(` in `mcp-server/src/tools/*.ts` exactly
 
 | Tool | What it does |
 |---|---|
-| `act_click` | Click an element by snapshot ref or CSS selector. |
-| `act_type` | Type text into an element (focuses it first, optional Enter submit). |
-| `act_fill_form` | Fill multiple form fields in one call (ref or selector each). |
-| `act_select` | Select option(s) in a `<select>` element by value. |
-| `act_hover` | Hover over an element (reveals tooltips, menus). |
+| `act_click` | Click an element by snapshot ref or CSS selector. Fails on disabled elements. |
+| `act_type` | Type into a text field (optional submit via its form or composer's own button, else Enter). |
+| `act_fill_form` | Fill several fields in one call; every field is checked first, so a bad one changes nothing. |
+| `act_select` | Select option(s) in a `<select>`: exact value first, then label. |
+| `act_hover` | Send hover events (JS menus and tooltips; CSS `:hover` can't be triggered). |
 | `act_scroll` | Scroll the page or an element (direction/pixels, or top/bottom). |
 | `act_key` | Press a key, optionally with modifiers (e.g. `Enter`, `a` + Ctrl). |
 | `act_wait` | Wait for text or a selector to appear (poll, `timeoutMs` default 10000 / max 60000). |
@@ -262,7 +267,7 @@ Tool names below match `registerTool(` in `mcp-server/src/tools/*.ts` exactly
 | `bookmarks_remove` | Delete a bookmark by id (destructive: needs `confirm:true`). |
 | `history_search` | Search browsing history. |
 | `downloads_list` | List recent downloads (filename, state, progress). |
-| `cookies_for_tab` | Read cookies visible to a tab's page (read-only, no modification). |
+| `cookies_for_tab` | Read cookies visible to a tab's page, from its container/private store, including ones partitioned under that site (read-only). |
 | `sessions_recently_closed` | List recently closed tabs/windows available for restore. |
 | `sessions_restore` | Restore a recently closed tab/window by session id. |
 
@@ -271,7 +276,7 @@ Tool names below match `registerTool(` in `mcp-server/src/tools/*.ts` exactly
 | Tool | What it does |
 |---|---|
 | `extension_status` | Check whether the bridge extension is connected, plus profile details. |
-| `wait_for_tab_event` | Wait for an extension-pushed event (`tab.updated/removed/activated`, `download.done`). |
+| `wait_for_tab_event` | Wait for an extension-pushed event (`tab.updated/removed/activated`, `download.done`); pass a result's `seq` as `afterSeq` to catch events between calls. |
 | `cursor_note` | Show a note in the AI cursor bubble without doing anything. |
 
 ## Troubleshooting
@@ -302,6 +307,11 @@ it sees one). Then press **Retry**.
 - **`act_wait` vs bridge timeout.** `act_wait` has its own `timeoutMs`
   (default 10000, max 60000); the helper extends its 30s watchdog to
   `timeoutMs + 15s` for that call.
+- **`REF_STALE` / `REF_NOT_FOUND`.** Refs from `snapshot_ax` belong to one page
+  load and are never reused. Pass the snapshot's `generation` with refs; after
+  the page changes or navigates, take a new snapshot.
+- **`PAYLOAD_TOO_LARGE`.** Firefox caps native messages at 1 MB; send less text
+  per call.
 - **Helper logs.** The helper writes to stderr, which Firefox shows in the
   Browser Console (Ctrl+Shift+J) prefixed `[webmcp]`.
 
@@ -309,6 +319,11 @@ it sees one). Then press **Retry**.
 
 - **Local only by default.** The helper binds `127.0.0.1`; every MCP request
   needs the 256-bit bearer token, compared in constant time.
+- **Browser checks.** Requests with a foreign `Host` or `Origin` header get 403
+  (DNS rebinding / cross-site protection); the token is checked before the
+  body is parsed.
+- **Cancellation.** Closing an HTTP request or sending
+  `notifications/cancelled` stops the command in Firefox too.
 - **Confirm guard.** `tab_close`, `window_close`, `bookmarks_remove` refuse
   without explicit `confirm:true`.
 - **No password-store access.** There is no tool for saved logins / the

@@ -25,6 +25,7 @@ import readline from "node:readline";
 import {
   isHello,
   isHostConfig,
+  MAX_HOST_MESSAGE_BYTES,
   NATIVE_HOST_NAME,
   PROTOCOL,
   type HostExitMessage,
@@ -37,7 +38,6 @@ import { McpHttp, SERVER_VERSION } from "./http.js";
 const EXTENSION_ID = "webmcp-controller@hamb1y.github.io";
 /** Pre-0.3.4 native host name; its registration is removed on install so stale helpers can't be launched. */
 const LEGACY_HOST_NAME = "firefox_mcp_bridge";
-const MAX_OUT = 1024 * 1024; // Firefox rejects host->extension messages over 1 MB
 
 // ===================================================================== host
 
@@ -47,9 +47,9 @@ function runHost(): void {
 
   const write = (obj: unknown): void => {
     const body = Buffer.from(JSON.stringify(obj), "utf8");
-    if (body.length > MAX_OUT) {
-      console.error(`[webmcp] dropping ${body.length}-byte message to extension (over 1 MB)`);
-      return;
+    if (body.length > MAX_HOST_MESSAGE_BYTES) {
+      // Callers check first (bridge.call -> PAYLOAD_TOO_LARGE); this is the backstop.
+      throw new Error(`message to extension is ${body.length} bytes (Firefox's limit is 1 MB)`);
     }
     const header = Buffer.alloc(4);
     header.writeUInt32LE(body.length, 0);
@@ -77,8 +77,16 @@ function runHost(): void {
   const onMessage = (msg: unknown): void => {
     if (isHello(msg)) {
       const p = msg.hello.protocol ?? 1;
-      if (p !== PROTOCOL) console.error(`[webmcp] add-on speaks protocol ${p}, this helper speaks ${PROTOCOL}`);
-      bridge.connect(link, msg.hello);
+      let refuse: { code: string; message: string } | undefined;
+      if (p !== PROTOCOL) {
+        const older = p < PROTOCOL ? "the WebMCP Controller add-on" : "the helper app (rerun the install command from the add-on popup)";
+        refuse = {
+          code: "PROTOCOL_MISMATCH",
+          message: `add-on speaks protocol ${p}, helper ${SERVER_VERSION} speaks ${PROTOCOL}: update ${older}`,
+        };
+        console.error(`[webmcp] ${refuse.message}`);
+      }
+      bridge.connect(link, msg.hello, refuse);
       sendStatus();
       return;
     }
@@ -90,14 +98,14 @@ function runHost(): void {
         console.error("[webmcp] refusing hostConfig without a token of at least 16 chars");
         return;
       }
-      void http.apply({
+      http.apply({
         port,
         bind,
         token: c.token,
         confirmDestructive: c.confirmDestructive !== false,
         cmdTimeoutMs: 30_000,
         allowWsl: c.allowWsl === true,
-      });
+      }).catch((e) => console.error(`[webmcp] applying settings failed: ${String(e)}`));
       return;
     }
     bridge.receive(msg);

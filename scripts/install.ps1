@@ -17,16 +17,21 @@
     Write-Host "Downloading $name ..."
     Invoke-WebRequest -UseBasicParsing -Uri "$base/$name" -OutFile $exe
 
+    # Refuse to run anything we can't verify.
     try {
       $sums = (Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS").Content
-      if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
-      $line = ($sums -split "`n") | Where-Object { $_ -match " $([regex]::Escape($name))\s*$" } | Select-Object -First 1
-      if ($line) {
-        $want = ($line -split '\s+')[0].ToLower()
-        $got = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
-        if ($want -ne $got) { throw "Checksum mismatch for $name - download corrupted, try again." }
-      }
-    } catch [System.Net.WebException] { }
+    } catch {
+      throw "Couldn't download SHA256SUMS to verify $name. Not installing."
+    }
+    if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
+    $want = $null
+    foreach ($l in ($sums -split "`r?`n")) {
+      $f = $l.Trim() -split '\s+', 2
+      if ($f.Count -eq 2 -and ($f[1] -eq $name -or $f[1] -eq "*$name")) { $want = $f[0].ToLower(); break }
+    }
+    if (-not $want) { throw "SHA256SUMS has no entry for $name. Not installing." }
+    $got = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
+    if ($want -ne $got) { throw "Checksum mismatch for $name - download corrupted or tampered with. Not installing." }
 
     & $exe install
     if ($LASTEXITCODE) { throw "Install failed (exit $LASTEXITCODE)." }

@@ -30,6 +30,11 @@ const refField = z
 
 const selectorField = z.string().optional().describe("CSS selector (alternative to ref)");
 
+const generationField = z
+  .string()
+  .optional()
+  .describe("The `generation` of the snapshot_ax the ref came from. If the page has since navigated, the call fails with REF_STALE instead of acting on the wrong element.");
+
 /** Guard for tools that need exactly one element target. Returns an error string or null. */
 function requireTarget(args: { ref?: number; selector?: string }, tool: string): string | null {
   if (args.ref === undefined && args.selector === undefined) {
@@ -46,11 +51,12 @@ export function registerActTools(
   server.registerTool(
     "act_click",
     {
-      description: "Click an element by snapshot ref or CSS selector.",
+      description: "Click an element by snapshot ref or CSS selector. Fails with ELEMENT_DISABLED on a disabled element.",
       inputSchema: {
         tabId: tabIdField,
         ref: refField,
         selector: selectorField,
+        generation: generationField,
         button: z.enum(["left", "middle", "right"]).optional().describe("Mouse button (default left)"),
       },
     },
@@ -62,6 +68,7 @@ export function registerActTools(
           tabId: args.tabId,
           ref: args.ref,
           selector: args.selector,
+          generation: args.generation,
           button: args.button,
         }),
       );
@@ -71,13 +78,16 @@ export function registerActTools(
   server.registerTool(
     "act_type",
     {
-      description: "Type text into an element (focuses it first). Optionally submit with Enter.",
+      description:
+        "Replace the value of a text field, textarea, contenteditable, <select> (by option value or label) or checkbox/radio (\"true\"/\"false\"). " +
+        "Fails with NOT_EDITABLE on buttons and read-only fields. Optionally submit afterwards.",
       inputSchema: {
         tabId: tabIdField,
         ref: refField,
         selector: selectorField,
+        generation: generationField,
         text: z.string().describe("Text to type"),
-        submit: z.boolean().optional().describe("Submit after typing: presses Enter, and if the page ignores it, clicks the nearby Send/Submit button or submits the form. Result says which worked."),
+        submit: z.boolean().optional().describe("Submit after typing, once: in a form, clicks its submit button (or submits it); outside a form (chat boxes), presses Enter and only if the page ignores it clicks the box's own Send button. Result says how (`submitted`), or `submitted:false` with a note."),
       },
     },
     async (args) => {
@@ -88,6 +98,7 @@ export function registerActTools(
           tabId: args.tabId,
           ref: args.ref,
           selector: args.selector,
+          generation: args.generation,
           text: args.text,
           submit: args.submit,
         }),
@@ -98,20 +109,27 @@ export function registerActTools(
   server.registerTool(
     "act_fill_form",
     {
-      description: "Fill multiple form fields in one call. Each field targets a ref or selector.",
+      description:
+        "Fill several fields in one call (same value rules as act_type). Every field is checked before anything changes, " +
+        "so a bad ref or value fails the whole call without partial edits.",
       inputSchema: {
         tabId: tabIdField,
         fields: z
           .array(
-            z.object({
-              ref: z.number().int().positive().optional().describe("Element ref from snapshot_ax"),
-              selector: z.string().optional().describe("CSS selector (alternative to ref)"),
-              value: z.string().describe("Value to fill"),
-            }),
+            z
+              .object({
+                ref: z.number().int().positive().optional().describe("Element ref from snapshot_ax"),
+                selector: z.string().optional().describe("CSS selector (alternative to ref)"),
+                value: z.string().describe("Value to fill; \"true\"/\"false\" for checkboxes, option value or label for selects"),
+              })
+              .refine((f) => f.ref !== undefined || f.selector !== undefined, {
+                message: "each field needs a ref or selector",
+              }),
           )
           .min(1)
           .describe("Fields to fill (at least one)"),
-        submit: z.boolean().optional().describe("Submit the form after filling"),
+        generation: generationField,
+        submit: z.boolean().optional().describe("Submit the form after filling (same rules as act_type)"),
       },
     },
     async (args) =>
@@ -119,6 +137,7 @@ export function registerActTools(
         await callBridge(bridge, "act.fillForm", {
           tabId: args.tabId,
           fields: args.fields,
+          generation: args.generation,
           submit: args.submit,
         }),
       ),
@@ -127,12 +146,15 @@ export function registerActTools(
   server.registerTool(
     "act_select",
     {
-      description: "Select option(s) in a <select> element by value.",
+      description:
+        "Select option(s) in a native <select>. Each value matches an option's value exactly, then its visible label, then either ignoring case. " +
+        "Fails with NO_MATCH (listing the options) if one doesn't match. For custom dropdowns, use act_click.",
       inputSchema: {
         tabId: tabIdField,
         ref: refField,
         selector: selectorField,
-        values: z.array(z.string()).min(1).describe("Option value(s) to select"),
+        generation: generationField,
+        values: z.array(z.string()).min(1).describe("Option value(s) or label(s) to select; more than one only for multi-selects"),
       },
     },
     async (args) => {
@@ -143,6 +165,7 @@ export function registerActTools(
           tabId: args.tabId,
           ref: args.ref,
           selector: args.selector,
+          generation: args.generation,
           values: args.values,
         }),
       );
@@ -152,11 +175,14 @@ export function registerActTools(
   server.registerTool(
     "act_hover",
     {
-      description: "Hover over an element (reveals tooltips, menus).",
+      description:
+        "Hover over an element by sending pointer/mouse hover events. Opens menus and tooltips driven by JavaScript; " +
+        "CSS-only :hover effects can't be triggered by an extension.",
       inputSchema: {
         tabId: tabIdField,
         ref: refField,
         selector: selectorField,
+        generation: generationField,
       },
     },
     async (args) => {
@@ -167,6 +193,7 @@ export function registerActTools(
           tabId: args.tabId,
           ref: args.ref,
           selector: args.selector,
+          generation: args.generation,
         }),
       );
     },
@@ -181,6 +208,7 @@ export function registerActTools(
         tabId: tabIdField,
         ref: refField,
         selector: selectorField,
+        generation: generationField,
         direction: z.enum(["up", "down", "left", "right"]).optional().describe("Scroll direction"),
         pixels: z.number().int().positive().optional().describe("Pixels to scroll (default ~80% of the viewport)"),
         amount: z.number().int().positive().optional().describe("Alias for pixels"),
@@ -193,6 +221,7 @@ export function registerActTools(
           tabId: args.tabId,
           ref: args.ref,
           selector: args.selector,
+          generation: args.generation,
           direction: args.direction,
           pixels: args.pixels ?? args.amount,
           to: args.to,
@@ -203,7 +232,11 @@ export function registerActTools(
   server.registerTool(
     "act_key",
     {
-      description: "Press a key, optionally with modifiers (e.g. key 'Enter', or 'a' + Ctrl).",
+      description:
+        "Press a key on the focused element, optionally with modifiers. The page's key handlers always run; since extension key events are " +
+        "untrusted, the add-on itself performs common default actions the page didn't cancel: Tab/Shift+Tab move focus, Enter activates " +
+        "buttons/links or submits a form field, Space toggles/activates, printable keys and Backspace/Delete edit text fields, " +
+        "arrows/PageUp/PageDown/Home/End scroll, Ctrl+A selects all. Browser shortcuts (Ctrl+T, Ctrl+L…) aren't possible. Result `effect` says what happened.",
       inputSchema: {
         tabId: tabIdField,
         key: z.string().describe("Key to press, e.g. 'Enter', 'Escape', 'Tab', 'a'"),
