@@ -20,6 +20,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: npm ci
       - run: node scripts/set-version.mjs --check "${GITHUB_REF_NAME#v}"
+      - run: npm run build
       - run: node test/e2e.mjs
       - run: npm run release
         env:
