@@ -16,10 +16,14 @@ const check = (name, ok, extra = "") => {
 };
 
 const READY = {
-  version: "0.3.5", protocol: 1, compat: { state: "ok" }, platform: { os: "win", arch: "x86-64" }, hostMissing: false,
-  connected: true, starting: false, listening: true, host: { version: "0.3.5", url: "http://127.0.0.1:8901/mcp", extraUrls: [] },
+  version: "0.3.7", protocol: 1, compat: { state: "ok" }, platform: { os: "win", arch: "x86-64" }, hostMissing: false,
+  connected: true, starting: false, listening: true, host: { version: "0.3.7", logFile: "C:\\Users\\me\\AppData\\Local\\webmcp-controller\\webmcp-host.log", url: "http://127.0.0.1:8901/mcp", extraUrls: [] },
   url: "http://127.0.0.1:8901/mcp", token: "a".repeat(64), port: 8901, bind: "127.0.0.1", allowWsl: false,
   confirmDestructive: true, showCursor: true, defaults: { port: 8901, bind: "127.0.0.1" }, lastError: "", commands: 3,
+  events: [
+    { at: Date.now() - 60000, text: "Helper stopped: <b>pipe</b>", level: "bad" },
+    { at: Date.now() - 1000, text: "Listening on http://127.0.0.1:8901/mcp", level: "ok", count: 2 },
+  ],
 };
 
 // Runs in the page: a fake runtime.sendMessage with the same validation as background.js.
@@ -77,18 +81,39 @@ const cmd = await text(page, "#cfg");
 check("Claude Code command replaces an existing entry", /^claude mcp remove --scope user firefox 2>\$null; claude mcp add --scope user /.test(cmd), cmd);
 check("command carries the token", cmd.includes("Bearer " + "a".repeat(64)));
 check("installed helper is tucked away", !(await visible(page, "#setupNow pre")) && (await page.locator("#install").evaluate((e) => e.style.order)) === "1");
-check("WSL option offered on Windows", await visible(page, "#kindWsl"));
+check("WSL option offered on Windows", await visible(page, "#whereRow") && (await text(page, "#localName")) === "Windows");
+check("WSL panel hidden for Windows-side AIs", !(await visible(page, "#wsl")));
+await page.locator("#activity summary").click();
+const evs = await page.locator("#events li").allTextContents();
+check("recent activity lists newest first", evs.length === 2 && /Listening.*×2/.test(evs[0]) && /Helper stopped/.test(evs[1]), JSON.stringify(evs));
+check("activity text isn't parsed as HTML", (await page.locator("#events b").count()) === 0);
+check("helper log path shown", /webmcp-host\.log/.test(await text(page, "#logLine")) && (await visible(page, "#logLine")));
 
 // ---- WSL ----
-await page.locator("#kindWsl").click();
+await page.locator("label:has(input[name=where][value=wsl])").click();
+await page.waitForTimeout(200);
 check("WSL command looks up the Windows address", /\$\(ip route show default/.test(await text(page, "#cfg")) && /2>\/dev\/null/.test(await text(page, "#cfg")));
 check("WSL switch shows next to the command", await visible(page, "#allowWsl"));
-check("WSL off is flagged", /^Off/.test(await text(page, "#wslState")));
-check("chosen harness is remembered", (await page.evaluate(() => localStorage.getItem("fxmcp.kind"))) === "wsl");
-await page.locator("#allowWsl").check();
-await page.waitForTimeout(200);
-check("WSL switch saves at once", (await sent(page)).some((m) => m.type === "set-config" && m.allowWsl === true));
+check("picking WSL turns WSL access on", (await sent(page)).some((m) => m.type === "set-config" && m.allowWsl === true) &&
+  (await page.locator("#allowWsl").isChecked()));
+check("choice is remembered", (await page.evaluate(() => localStorage.getItem("fxmcp.kind") + "/" + localStorage.getItem("fxmcp.where"))) === "claude/wsl");
 check("WSL address shown once listening", /172\.17\.16\.1/.test(await text(page, "#wslState")), await text(page, "#wslState"));
+await page.evaluate(() => { window.__st.host.wslAddress = "172.17.16.1"; });
+await page.locator("label:has(input[name=kind][value=json])").click();
+await page.waitForTimeout(1700);
+let cfgTxt = await text(page, "#cfg");
+check("any AI can be set up for WSL", (await visible(page, "#wsl")) && cfgTxt.includes("http://172.17.16.1:8901/mcp") && JSON.parse(cfgTxt).mcpServers.firefox.headers.Authorization === "Bearer " + "a".repeat(64), cfgTxt);
+await page.locator("label:has(input[name=kind][value=codex])").click();
+cfgTxt = await text(page, "#cfg");
+check("Codex gets TOML", /^\[mcp_servers\.firefox\]/m.test(cfgTxt) && cfgTxt.includes("172.17.16.1"), cfgTxt);
+await page.locator("#allowWsl").uncheck();
+await page.waitForTimeout(200);
+check("WSL off is flagged", /^Off/.test(await text(page, "#wslState")));
+await page.locator("label:has(input[name=where][value=local])").click();
+await page.locator("label:has(input[name=kind][value=gemini])").click();
+cfgTxt = await text(page, "#cfg");
+check("Gemini on Windows uses localhost", /^gemini mcp /.test(cfgTxt) && cfgTxt.includes("127.0.0.1:8901") && !(await visible(page, "#wsl")), cfgTxt);
+await page.locator("label:has(input[name=kind][value=claude])").click();
 
 // ---- toggles ----
 await page.locator("#showCursor").uncheck();
@@ -133,8 +158,8 @@ await page.close();
 
 // ---- not on Windows ----
 page = await open({ ...READY, platform: { os: "linux", arch: "x86-64" } }, "wsl");
-check("no WSL option off Windows", !(await visible(page, "#kindWsl")) && !(await visible(page, "#wsl")));
-check("falls back from WSL to Claude Code", (await page.locator("input[value=claude]").isChecked()) && /2>\/dev\/null/.test(await text(page, "#cfg")));
+check("no WSL option off Windows", !(await visible(page, "#whereRow")) && !(await visible(page, "#wsl")));
+check("old WSL choice becomes Claude Code here", (await page.locator("input[value=claude]").isChecked()) && /2>\/dev\/null/.test(await text(page, "#cfg")) && (await text(page, "#cfg")).includes("127.0.0.1"));
 await page.close();
 
 // ---- helper missing ----

@@ -1260,9 +1260,11 @@ async function handleMessage(msg) {
     return { ok: true };
   }
   if (msg.cursor) await cursorBefore(msg);
-  var result = await dispatch(msg);
-  if (msg.cursor) cursorAfter(msg);
-  return result;
+  try {
+    return await dispatch(msg);
+  } finally {
+    if (msg.cursor) cursorAfter(msg); // also on failure, or the cursor stays busy
+  }
 }
 
 async function dispatch(msg) {

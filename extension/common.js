@@ -77,33 +77,66 @@ function mcpUrl(st) {
   return 'http://' + host + ':' + ((st && st.port) || 8901) + '/mcp';
 }
 
-/* `claude mcp add` refuses a name that already exists, so drop any old "firefox" entry first
- * (e.g. one holding a token from before a reinstall). User scope: it works from every folder. */
-function claudeAdd(url, auth, shell) {
+/* `claude mcp add` / `gemini mcp add` refuse a name that already exists, so drop any old "firefox"
+ * entry first (e.g. one holding a token from before a reinstall). User scope: works from every folder. */
+function cliAdd(cli, url, auth, shell) {
   var quiet = shell === 'powershell' ? ' 2>$null' : ' 2>/dev/null';
-  return 'claude mcp remove --scope user firefox' + quiet + '; claude mcp add --scope user --transport http firefox "' +
+  return cli + ' mcp remove --scope user firefox' + quiet + '; ' + cli + ' mcp add --scope user --transport http firefox "' +
     url + '" --header "Authorization: ' + auth + '"';
 }
 
-/* Harness config snippets. kind: 'json' | 'claude' | 'opencode' | 'wsl'. */
-function mcpConfig(st, kind) {
-  var url = mcpUrl(st);
+var HARNESSES = ['claude', 'codex', 'gemini', 'opencode', 'json'];
+var SHELL_HARNESSES = { claude: 'claude', gemini: 'gemini' };
+
+/* Where the AI runs: 'local' (this computer) or 'wsl' (Linux under WSL, Firefox on Windows). */
+function canWsl(st) { return !!(st && st.platform && st.platform.os === 'win'); }
+
+/* The MCP URL as seen from where the AI runs. inShell: may use shell substitution. */
+function urlFrom(st, where, inShell) {
+  if (where !== 'wsl' || !canWsl(st)) return mcpUrl(st);
+  var port = (st && st.port) || 8901;
+  // WSL's default gateway is Windows' WSL adapter, which the helper listens on when "Allow WSL" is on.
+  // A command looks it up when it runs (it changes when Windows restarts); a config file gets today's address.
+  if (inShell) return 'http://$(ip route show default | awk \'{print $3}\'):' + port + '/mcp';
+  var addr = (st.host && st.host.wslAddress) || 'WINDOWS-IP';
+  return 'http://' + addr + ':' + port + '/mcp';
+}
+
+/* Config snippet for a harness. harness: one of HARNESSES ('wsl' = old name for Claude Code in WSL). */
+function mcpConfig(st, harness, where) {
+  if (harness === 'wsl') { harness = 'claude'; where = 'wsl'; }
+  if (HARNESSES.indexOf(harness) < 0) harness = 'json';
+  var wsl = where === 'wsl' && canWsl(st);
   var auth = 'Bearer ' + ((st && st.token) || '');
-  if (kind === 'wsl') {
-    // WSL's default gateway is Windows' WSL adapter, which the helper listens on when "Allow WSL" is on.
-    // Looked up when the command runs; it changes when Windows restarts.
-    var wslUrl = url.replace(/^http:\/\/[^/]+/, 'http://$(ip route show default | awk \'{print $3}\'):' + ((st && st.port) || 8901));
-    return claudeAdd(wslUrl, auth, 'sh');
+  var cli = SHELL_HARNESSES[harness];
+  if (cli) return cliAdd(cli, urlFrom(st, where, true), auth, !wsl && st && st.platform && st.platform.os === 'win' ? 'powershell' : 'sh');
+  var url = urlFrom(st, where, false);
+  if (harness === 'codex') {
+    return '[mcp_servers.firefox]\nurl = ' + JSON.stringify(url) + '\nhttp_headers = { Authorization = ' + JSON.stringify(auth) + ' }';
   }
-  if (kind === 'claude') {
-    return claudeAdd(url, auth, st && st.platform && st.platform.os === 'win' ? 'powershell' : 'sh');
-  }
-  if (kind === 'opencode') {
+  if (harness === 'opencode') {
     return JSON.stringify({ mcp: { firefox: { type: 'remote', url: url, headers: { Authorization: auth } } } }, null, 2);
   }
   return JSON.stringify({ mcpServers: { firefox: { type: 'http', url: url, headers: { Authorization: auth } } } }, null, 2);
 }
 
+/* What to do with the snippet. */
+function configHint(st, harness, where) {
+  var wsl = where === 'wsl' && canWsl(st);
+  var win = !!(st && st.platform && st.platform.os === 'win');
+  var term = wsl ? 'your WSL terminal' : win ? 'PowerShell' : 'a terminal';
+  var name = { claude: 'Claude Code', gemini: 'Gemini CLI' }[harness];
+  var h = name ? 'Run this in ' + term + '. It replaces any “firefox” server ' + name + ' already has.'
+    : harness === 'codex' ? 'Add this to ~/.codex/config.toml' + (wsl ? ' inside WSL' : '') + ', replacing any [mcp_servers.firefox] section already there.'
+    : harness === 'opencode' ? 'Merge this into opencode.json (in your project, or ~/.config/opencode/' + (wsl ? ' inside WSL' : '') + ').'
+    : 'Add this to your client’s MCP config file' + (wsl ? ' inside WSL' : '') + ', next to any servers already there.';
+  if (wsl && !name) {
+    h += (st.host && st.host.wslAddress)
+      ? ' The Windows address in it changes when Windows restarts: copy this again if your AI stops connecting.'
+      : ' Replace WINDOWS-IP with the output of: ip route show default | awk \'{print $3}\'';
+  }
+  return h;
+}
 function copy(text, btn) {
   var write = navigator.clipboard && navigator.clipboard.writeText
     ? navigator.clipboard.writeText(text)
@@ -157,16 +190,28 @@ function summarize(st) {
   return { cls: 'off', text: 'Helper not running' };
 }
 
-/* Last config format picked in settings; the popup's Copy button uses it too. */
-function configKind(set) {
+/* Last harness and place picked in settings; the popup's Copy button uses them too. */
+function pref(key, set, fallback, allowed) {
   try {
-    if (set) localStorage.setItem('fxmcp.kind', set);
-    return localStorage.getItem('fxmcp.kind') || 'json';
-  } catch (e) { return set || 'json'; }
+    if (set) localStorage.setItem(key, set);
+    var v = localStorage.getItem(key);
+    return allowed.indexOf(v) >= 0 ? v : fallback;
+  } catch (e) { return allowed.indexOf(set) >= 0 ? set : fallback; }
 }
+function migrateKind() {
+  try {
+    if (localStorage.getItem('fxmcp.kind') === 'wsl') {
+      localStorage.setItem('fxmcp.kind', 'claude');
+      localStorage.setItem('fxmcp.where', 'wsl');
+    }
+  } catch (e) {}
+}
+function configKind(set) { migrateKind(); return pref('fxmcp.kind', set, 'json', HARNESSES); }
+function configWhere(set) { migrateKind(); return pref('fxmcp.where', set, 'local', ['local', 'wsl']); }
 
 window.FxMcp = {
   hostSetup: hostSetup, renderSetup: renderSetup, setupNeed: setupNeed, mcpUrl: mcpUrl,
-  mcpConfig: mcpConfig, configKind: configKind, copy: copy, summarize: summarize
+  mcpConfig: mcpConfig, configHint: configHint, configKind: configKind, configWhere: configWhere, canWsl: canWsl,
+  copy: copy, summarize: summarize
 };
 })();

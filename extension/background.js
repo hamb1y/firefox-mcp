@@ -29,6 +29,7 @@ var DEFAULT_PORT = 8901;
 var DEFAULT_BIND = '127.0.0.1';
 var BACKOFFS = [1000, 2000, 5000, 10000, 30000]; // ms, last value repeats
 var MISSING_BACKOFF_MS = 60000; // helper not installed: retry slowly (Retry button is instant)
+var START_TIMEOUT_MS = 20000;   // a helper that launched but never spoke is stuck: start it again
 
 var CAPABILITIES = [
   'tabs.list', 'tabs.query', 'windows.list', 'active.tab',
@@ -54,11 +55,22 @@ var CFG = { token: '', port: DEFAULT_PORT, bind: DEFAULT_BIND, allowWsl: false, 
 var port = null;           // runtime.Port to the native helper
 var backoffIdx = 0;
 var connectTimer = null;
+var startTimer = null;     // fires if a just-launched helper never says anything
 var hostMissing = false;   // Firefox couldn't find/launch the helper
 var hostStatus = null;     // last { hostStatus } from the helper
 var hostRestarting = false; // helper said it's exiting to make way for an updated binary
 var lastError = '';        // human-readable reason for the popup/options page
 var connectedAt = 0;
+var events = [];          // recent helper ups and downs, newest last, for the settings page
+var EVENTS_MAX = 30;
+
+/* Remember what happened to the helper, so "it stopped working" can be traced afterwards. */
+function note(text, level) {
+  var lastEv = events[events.length - 1];
+  if (lastEv && lastEv.text === text) { lastEv.at = Date.now(); lastEv.count = (lastEv.count || 1) + 1; return; }
+  events.push({ at: Date.now(), text: text, level: level || 'info' });
+  if (events.length > EVENTS_MAX) events.splice(0, events.length - EVENTS_MAX);
+}
 var inflight = new Map();  // command id -> AbortController, for { cancel: id }
 var cmdCount = 0;
 var platform = { os: '', arch: '' };
@@ -255,6 +267,26 @@ async function sendToTab(tabId, p, msg) {
 
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+/* The page went away (navigated, reloaded, closed) before its content script replied. */
+var PAGE_GONE_RE = /destroyed before|message manager disconnected|context is inactive|page (was )?unloaded/i;
+var READ_KINDS = /^(ax-snapshot|page-text|page-html|act-find)$/;
+
+/* sendToTab, but an action that navigated the page before replying isn't reported as a failure
+ * (the AI would repeat a click that worked), and a read retries once on the page that replaced it. */
+async function sendToPage(tabId, p, msg) {
+  try {
+    return await sendToTab(tabId, p, msg);
+  } catch (e) {
+    if (!PAGE_GONE_RE.test(String((e && e.message) || e))) throw e;
+    if (READ_KINDS.test(msg.kind)) {
+      await sleep(500);
+      return await sendToTab(tabId, p, msg);
+    }
+    if (msg.kind === 'act-wait') throw be('NAVIGATED', 'The page navigated away while waiting; take a new snapshot');
+    return { done: true, pageChanged: true, note: 'The page navigated or reloaded as a result; take a new snapshot before using refs' };
+  }
+}
+
 async function shoot(tab, p) {
   var format = p.format === 'jpeg' ? 'jpeg' : 'png';
   var opts = format === 'jpeg' ? { format: format, quality: 80 } : { format: format };
@@ -376,6 +408,8 @@ var handlers = {
     var tabs = await call(B.tabs, 'query', {});
     var urlRe = null, titleRe = null;
     try {
+      // A pathological pattern would freeze the whole add-on, so keep them short.
+      if (String(p.urlPattern || '').length > 500 || String(p.titlePattern || '').length > 500) throw new Error('pattern longer than 500 characters');
       if (p.urlPattern) urlRe = new RegExp(String(p.urlPattern));
       if (p.titlePattern) titleRe = new RegExp(String(p.titlePattern));
     } catch (e) {
@@ -542,7 +576,7 @@ var handlers = {
   'page.snapshot': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, {
+    return await sendToPage(tab.id, p, {
       kind: 'ax-snapshot',
       compact: p.compact !== undefined ? !!p.compact : true,
       maxChars: num(p.maxChars, 50000)
@@ -551,12 +585,12 @@ var handlers = {
   'page.text': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'page-text', maxChars: num(p.maxChars, 50000) });
+    return await sendToPage(tab.id, p, { kind: 'page-text', maxChars: num(p.maxChars, 50000) });
   },
   'page.html': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, {
+    return await sendToPage(tab.id, p, {
       kind: 'page-html',
       selector: p.selector,
       maxChars: num(p.maxChars, 50000)
@@ -601,12 +635,12 @@ var handlers = {
   'act.click': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-click', ref: p.ref, selector: p.selector, generation: p.generation, button: p.button || 'left' });
+    return await sendToPage(tab.id, p, { kind: 'act-click', ref: p.ref, selector: p.selector, generation: p.generation, button: p.button || 'left' });
   },
   'act.type': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, {
+    return await sendToPage(tab.id, p, {
       kind: 'act-type', ref: p.ref, selector: p.selector, generation: p.generation,
       text: (p.text === undefined || p.text === null) ? '' : String(p.text),
       submit: !!p.submit
@@ -616,13 +650,13 @@ var handlers = {
     if (!Array.isArray(p.fields)) throw be('INVALID_PARAMS', 'act.fillForm requires fields[]');
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-fillForm', fields: p.fields, generation: p.generation, submit: !!p.submit });
+    return await sendToPage(tab.id, p, { kind: 'act-fillForm', fields: p.fields, generation: p.generation, submit: !!p.submit });
   },
   'act.select': async function (p) {
     if (!Array.isArray(p.values)) throw be('INVALID_PARAMS', 'act.select requires values[]');
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, {
+    return await sendToPage(tab.id, p, {
       kind: 'act-select', ref: p.ref, selector: p.selector, generation: p.generation,
       values: p.values.map(String)
     });
@@ -630,12 +664,12 @@ var handlers = {
   'act.hover': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-hover', ref: p.ref, selector: p.selector, generation: p.generation });
+    return await sendToPage(tab.id, p, { kind: 'act-hover', ref: p.ref, selector: p.selector, generation: p.generation });
   },
   'act.scroll': async function (p) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, {
+    return await sendToPage(tab.id, p, {
       kind: 'act-scroll', ref: p.ref, selector: p.selector, generation: p.generation,
       direction: p.direction, pixels: p.pixels, to: p.to
     });
@@ -646,7 +680,7 @@ var handlers = {
     }
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-key', key: String(p.key), modifiers: p.modifiers });
+    return await sendToPage(tab.id, p, { kind: 'act-key', key: String(p.key), modifiers: p.modifiers });
   },
   'act.wait': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
@@ -656,7 +690,7 @@ var handlers = {
     };
     ctx.signal.addEventListener('abort', stop);
     try {
-      return await sendToTab(tab.id, p, {
+      return await sendToPage(tab.id, p, {
         kind: 'act-wait', text: p.text, selector: p.selector, opId: ctx.id,
         timeoutMs: num(p.timeoutMs, 10000)
       });
@@ -670,7 +704,7 @@ var handlers = {
     }
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToTab(tab.id, p, { kind: 'act-find', query: String(p.query) });
+    return await sendToPage(tab.id, p, { kind: 'act-find', query: String(p.query) });
   },
 
   /* ---- browser data ---- */
@@ -768,7 +802,11 @@ function sendEvent(evt) { send(evt); }
 async function handleIncoming(msg) {
   if (!msg || typeof msg !== 'object') return;
   if (msg.hostStatus && typeof msg.hostStatus === 'object') {
+    var prev = hostStatus;
     hostStatus = msg.hostStatus;
+    if (!prev) note('Helper v' + (hostStatus.version || '?') + ' running');
+    if (hostStatus.error && (!prev || prev.error !== hostStatus.error)) note(hostStatus.error, 'bad');
+    else if (hostStatus.listening && (!prev || !prev.listening || prev.url !== hostStatus.url)) note('Listening on ' + hostStatus.url, 'ok');
     lastError = hostStatus.error || '';
     var c = compat();
     if (c.state === 'helper-old') lastError = 'Helper app v' + c.helper + ' is too old for this add-on — run the install command again';
@@ -780,6 +818,9 @@ async function handleIncoming(msg) {
     // Expected exit (e.g. its binary was just updated): relaunch quickly, no error.
     hostRestarting = true;
     log('helper exiting: ' + (msg.hostExit.reason || '?'));
+    note(msg.hostExit.reason === 'updated'
+      ? 'Helper updated' + (msg.hostExit.version ? ' to v' + msg.hostExit.version : '') + ', restarting it'
+      : 'Helper is shutting down');
     return;
   }
   if (typeof msg.cancel === 'string') {
@@ -795,14 +836,15 @@ async function handleIncoming(msg) {
       return;
     }
     var ac = new AbortController();
+    var from = port; // a reply belongs to the helper that asked, not to one started since
     inflight.set(msg.id, ac);
     try {
       var result = await onCommand(msg, { id: String(msg.id), signal: ac.signal });
-      send({ id: msg.id, ok: true, result: result === undefined ? null : result });
+      if (port === from) send({ id: msg.id, ok: true, result: result === undefined ? null : result });
     } catch (e) {
-      send({ id: msg.id, ok: false, error: toBridgeError(e) });
+      if (port === from) send({ id: msg.id, ok: false, error: toBridgeError(e) });
     } finally {
-      inflight.delete(msg.id);
+      if (inflight.get(msg.id) === ac) inflight.delete(msg.id);
     }
   }
 }
@@ -820,13 +862,25 @@ function scheduleReconnect() {
   }, delay);
 }
 
+/* The helper is gone: stop whatever it asked for, nobody is waiting for the answer. */
+function abortInflight() {
+  inflight.forEach(function (ac) { try { ac.abort(); } catch (e) {} });
+  inflight.clear();
+}
+
+function clearStartTimer() {
+  if (startTimer) { clearTimeout(startTimer); startTimer = null; }
+}
+
 /* Drop the current helper (if any) and launch it again right away. */
 function reconnectNow() {
   backoffIdx = 0;
   if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+  clearStartTimer();
   var old = port;
   port = null;
   connectedAt = 0;
+  abortInflight();
   if (old) { try { old.disconnect(); } catch (e) {} }
   connect();
 }
@@ -878,6 +932,7 @@ function connect() {
   } catch (e) {
     hostMissing = true;
     lastError = 'Could not start the helper: ' + (e.message || e);
+    note(lastError, 'bad');
     updateBadge();
     scheduleReconnect();
     return;
@@ -886,8 +941,20 @@ function connect() {
   connectedAt = 0;
   hostStatus = null;
   lastError = '';
+  clearStartTimer();
+  startTimer = setTimeout(function () {
+    startTimer = null;
+    if (p !== port || connectedAt) return;
+    note('Helper didn’t answer within ' + (START_TIMEOUT_MS / 1000) + ' s; starting it again', 'bad');
+    port = null;
+    try { p.disconnect(); } catch (e) {}
+    lastError = 'Helper didn’t start';
+    updateBadge();
+    scheduleReconnect();
+  }, START_TIMEOUT_MS);
   p.onMessage.addListener(function (msg) {
     if (p !== port) return;
+    if (!connectedAt) clearStartTimer();
     if (hostMissing || !connectedAt) {
       // First message proves the helper really launched.
       hostMissing = false;
@@ -901,6 +968,8 @@ function connect() {
     var err = (dp && dp.error && dp.error.message) || (B.runtime.lastError && B.runtime.lastError.message) || '';
     log('helper disconnected: ' + (err || 'exited'));
     port = null;
+    clearStartTimer();
+    abortInflight();
     var wasUp = !!connectedAt;
     connectedAt = 0;
     hostStatus = null;
@@ -908,11 +977,13 @@ function connect() {
       hostMissing = false;
       lastError = '';
     } else if (!wasUp && (isMissingHostError(err) || !err)) {
+      if (!hostMissing) note('Helper app not found', 'bad');
       hostMissing = true;
       lastError = 'Helper app not installed';
     } else {
       hostMissing = false;
       lastError = 'Helper stopped' + (err ? ': ' + err : '');
+      note(lastError + (wasUp ? '' : ' while starting'), 'bad');
     }
     updateBadge();
     scheduleReconnect();
@@ -1081,7 +1152,8 @@ function statusSnapshot() {
     defaults: { port: DEFAULT_PORT, bind: DEFAULT_BIND },
     lastError: lastError,
     connectedAt: connectedAt,
-    commands: cmdCount
+    commands: cmdCount,
+    events: events.slice()
   };
 }
 

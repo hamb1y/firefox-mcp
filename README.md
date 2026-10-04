@@ -102,6 +102,8 @@ snippet. The copied config looks like:
 ```
 
 Claude Code: `claude mcp add --transport http firefox http://127.0.0.1:8901/mcp --header "Authorization: Bearer <token>"`.
+Codex (`~/.codex/config.toml`): `[mcp_servers.firefox]` with `url = "http://127.0.0.1:8901/mcp"` and `http_headers = { Authorization = "Bearer <token>" }`.
+Gemini CLI: `gemini mcp add --scope user --transport http firefox http://127.0.0.1:8901/mcp --header "Authorization: Bearer <token>"`.
 opencode: `{"mcp":{"firefox":{"type":"remote","url":"…/mcp","headers":{"Authorization":"Bearer <token>"}}}}`.
 Clients that only speak stdio: `npx -y mcp-remote http://127.0.0.1:8901/mcp --header "Authorization: Bearer <token>"`.
 
@@ -116,12 +118,15 @@ curl http://127.0.0.1:8901/health
 
 WSL2 (default NAT networking) can't reach Windows' `127.0.0.1`. Easiest:
 
-1. Add-on toolbar icon → **Settings** → **2. Connect your AI harness** → tick
-   **Allow harnesses inside WSL to connect**.
+1. Add-on toolbar icon → **Settings** → **Connect your AI** → **Your AI**: pick
+   yours (Claude Code, Codex, Gemini CLI, opencode, or Other) → **Runs in**: **WSL**.
+   That turns on **Let AIs in WSL connect to this Firefox** for you.
 2. Windows Firewall asks about `webmcp-host` → tick **Private networks**
    → **Allow access**.
-3. Same section → **Format** → **Claude Code inside WSL** → copy. It uses `$(ip route show default | awk '{print $3}')` for the Windows
-   address, so it survives reboots.
+3. **Copy**, then paste it inside WSL. The Claude Code and Gemini commands look up
+   the Windows address with `$(ip route show default | awk '{print $3}')`, so they
+   survive reboots; config files (Codex, opencode, JSON) hold the current address,
+   so copy them again if the connection stops after a Windows restart.
 
 The helper then also listens on the `vEthernet (WSL)` adapter only, not your
 LAN. Alternative: WSL mirrored networking (`networkingMode=mirrored` under

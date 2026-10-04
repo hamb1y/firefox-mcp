@@ -3,8 +3,10 @@
 //   node test/host.mjs                       (helper = node mcp-server/dist/host.js)
 //   node test/host.mjs path/to/webmcp-host   (test a compiled helper)
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,8 +22,14 @@ const check = (name, ok, extra = "") => {
   if (!ok) failures += 1;
 };
 
+// The helper logs into its install folder: keep that out of the real one.
+const dataHome = fs.mkdtempSync(path.join(os.tmpdir(), "webmcp-test-"));
+const env = { ...process.env, XDG_DATA_HOME: dataHome };
+const LOG = path.join(dataHome, "webmcp-controller", "webmcp-host.log");
+const readLog = () => { try { return fs.readFileSync(LOG, "utf8"); } catch { return ""; } };
+
 // ---- fake add-on ----
-const child = spawn(hostCmd[0], [...hostCmd.slice(1), "/fake/webmcp_controller.json", "test@example"], { stdio: ["pipe", "pipe", "inherit"] });
+const child = spawn(hostCmd[0], [...hostCmd.slice(1), "/fake/webmcp_controller.json", "test@example"], { stdio: ["pipe", "pipe", "inherit"], env });
 const fromHost = [];
 let buf = Buffer.alloc(0);
 child.stdout.on("data", (d) => {
@@ -90,7 +98,18 @@ const stale = await Promise.all(ports.slice(0, 3).map(portOpen));
 check("earlier ports are closed", stale.every((x) => !x), stale.join(","));
 const PORT = ports[3];
 
-let r = await call(PORT, "tabs_list");
+check("status says when the helper started and where it logs", st.startedAt > Date.now() - 60000 && st.logFile === LOG, JSON.stringify({ startedAt: st.startedAt, logFile: st.logFile }));
+check("helper writes a log", /host .* started \(pid/.test(readLog()), readLog().slice(0, 200));
+
+// Clients that open a GET stream must be told no: an idle stream that later broke made them give up on the server.
+let r = await req(PORT, { method: "GET" });
+check("GET /mcp -> 405, POST only", r.status === 405 && /POST/.test(r.text), `${r.status} ${r.text.slice(0, 80)}`);
+r = await req(PORT, { method: "DELETE" });
+check("DELETE /mcp -> 405", r.status === 405, String(r.status));
+r = await req(PORT, { method: "GET", headers: { authorization: "Bearer nope" } });
+check("GET /mcp still needs the token", r.status === 401, String(r.status));
+
+r = await call(PORT, "tabs_list");
 check("tabs_list works", r.status === 200 && /example\.com/.test(resultText(r)), resultText(r));
 
 // DNS rebinding / cross-site guards.
@@ -149,6 +168,42 @@ await sleep(200);
 r = await call(PORT, "tabs_list");
 check("matching protocol works again", /example\.com/.test(resultText(r)), resultText(r));
 
-child.kill();
+// A port that's busy (another Firefox profile, or the old helper still exiting) is retried until it frees up.
+const BUSY = BASE + 10;
+const blocker = net.createServer().listen(BUSY, "127.0.0.1");
+await new Promise((res) => blocker.once("listening", res));
+post(config(BUSY));
+for (let t = 0; t < 3000; t += 50) { st = lastStatus(); if (st?.port === BUSY && st.error) break; await sleep(50); }
+check("busy port is reported", st?.port === BUSY && !st.listening && /^Port /.test(st.error ?? ""), JSON.stringify(st && { listening: st.listening, error: st.error }));
+await new Promise((res) => blocker.close(res));
+for (let t = 0; t < 8000; t += 100) { st = lastStatus(); if (st?.listening) break; await sleep(100); }
+check("helper takes the port once it's free", st?.listening && st.port === BUSY && !st.error, JSON.stringify(st && { listening: st.listening, error: st.error }));
+r = await call(BUSY, "tabs_list");
+check("and serves on it", /example\.com/.test(resultText(r)), resultText(r));
+
+// Firefox closing the pipe ends the helper and frees the port.
+const exited = new Promise((res) => child.once("exit", () => res(true)));
+child.stdin.end();
+const gone = await Promise.race([exited, sleep(3000).then(() => false)]);
+check("helper exits when Firefox closes the pipe", gone);
+check("and frees the port", !(await portOpen(BUSY)));
+check("exit reason is logged", /exiting: Firefox closed the connection/.test(readLog()), readLog().split("\n").slice(-3).join(" | "));
+if (!gone) child.kill();
+
+// A parent that dies without closing the pipe (the pipe's other end lives on in a grandchild here).
+if (process.platform !== "win32" && process.argv.length <= 2) {
+  const q = (x) => `'${x.replace(/'/g, "'\\''")}'`;
+  const orphanLog = path.join(dataHome, "orphan");
+  const sh = spawn("sh", ["-c", `sleep 60 | ${hostCmd.map(q).join(" ")} /fake/m.json test@example & sleep 0.5`], {
+    stdio: "ignore", env: { ...env, XDG_DATA_HOME: orphanLog },
+  });
+  await new Promise((res) => sh.once("exit", res));
+  const olog = () => { try { return fs.readFileSync(path.join(orphanLog, "webmcp-controller", "webmcp-host.log"), "utf8"); } catch { return ""; } };
+  let ok = false;
+  for (let t = 0; t < 16000 && !ok; t += 250) { ok = /exiting: Firefox \(pid \d+\) is gone/.test(olog()); if (!ok) await sleep(250); }
+  check("helper exits when its parent dies", ok, olog().split("\n").slice(-3).join(" | "));
+}
+
+fs.rmSync(dataHome, { recursive: true, force: true });
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

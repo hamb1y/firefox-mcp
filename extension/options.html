@@ -11,6 +11,7 @@
   header { order: -3; }
   #status { order: -2; }
   .note { order: 2; }
+  #activity { order: 1; }
   header { display: flex; align-items: center; gap: 12px; }
   header h1 { font-size: 20px; margin: 0; }
   header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
@@ -46,6 +47,10 @@
   .seg input:checked + span { background: var(--accent); color: var(--accent-fg); }
   .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -4px; }
   .kindHint { margin: 0 0 8px; }
+  .pick { display: flex; align-items: center; gap: 0 12px; flex-wrap: wrap; }
+  .pickLbl { width: 64px; flex: none; font-size: 13px; color: var(--muted); }
+  .pick .seg { margin: 4px 0 6px; }
+  .pick:last-of-type .seg { margin-bottom: 10px; }
 
   .code { position: relative; }
   .code pre {
@@ -85,6 +90,15 @@
   }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
   #toast.err { background: var(--bad); color: #fff; }
+  #activity summary { color: var(--fg); font-size: 14px; font-weight: 600; }
+  #activity { margin-top: 0; }
+  #events { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 240px; overflow: auto; }
+  #events li { display: flex; gap: 10px; padding: 3px 0; border-top: 1px solid var(--line); }
+  #events li:first-child { border-top: 0; }
+  #events time { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+  #events .bad { color: var(--bad); }
+  #events .ok { color: var(--ok); }
+  #logLine { font-size: 12px; color: var(--muted); margin: 10px 0 0; overflow-wrap: anywhere; }
   .note { font-size: 12px; color: var(--muted); margin: 0; }
   [hidden] { display: none !important; }
   @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
@@ -117,13 +131,30 @@
   </details>
 </section>
 
+<details id="activity" class="card">
+  <summary>Recent activity</summary>
+  <ul id="events"></ul>
+  <p id="logLine" hidden>The helper keeps a log at <code id="logFile"></code></p>
+</details>
+
 <section id="connect" class="card">
   <h2>Connect your AI</h2>
-  <div class="seg" role="radiogroup" aria-label="Harness">
-    <label><input type="radio" name="kind" value="claude"><span>Claude Code</span></label>
-    <label id="kindWsl"><input type="radio" name="kind" value="wsl"><span>Claude Code in WSL</span></label>
-    <label><input type="radio" name="kind" value="json"><span>JSON config</span></label>
-    <label><input type="radio" name="kind" value="opencode"><span>opencode</span></label>
+  <div class="pick">
+    <span class="pickLbl" id="kindLbl">Your AI</span>
+    <div class="seg" role="radiogroup" aria-labelledby="kindLbl">
+      <label><input type="radio" name="kind" value="claude"><span>Claude Code</span></label>
+      <label><input type="radio" name="kind" value="codex"><span>Codex</span></label>
+      <label><input type="radio" name="kind" value="gemini"><span>Gemini CLI</span></label>
+      <label><input type="radio" name="kind" value="opencode"><span>opencode</span></label>
+      <label><input type="radio" name="kind" value="json"><span>Other (JSON)</span></label>
+    </div>
+  </div>
+  <div class="pick" id="whereRow">
+    <span class="pickLbl" id="whereLbl">Runs in</span>
+    <div class="seg" role="radiogroup" aria-labelledby="whereLbl">
+      <label><input type="radio" name="where" value="local"><span id="localName">This computer</span></label>
+      <label><input type="radio" name="where" value="wsl"><span>WSL</span></label>
+    </div>
   </div>
   <p id="kindHint" class="sub kindHint"></p>
   <div class="code">
@@ -131,12 +162,12 @@
     <button id="copyCfg" type="button" class="primary">Copy</button>
   </div>
   <div id="wsl" hidden>
-    <label class="switch"><input type="checkbox" id="allowWsl"> Let WSL connect to this Firefox</label>
+    <label class="switch"><input type="checkbox" id="allowWsl"> Let AIs in WSL connect to this Firefox</label>
     <div id="wslState"></div>
     <div class="sub">The helper also listens on Windows’ WSL network adapter. The first time, Windows may ask to let
       <b>webmcp-host</b> through the firewall: tick <b>Private networks</b> and click <b>Allow</b>. The token still
-      protects it. That address changes when Windows restarts; if Claude Code can’t connect after a restart, run the
-      command again. With WSL’s mirrored networking you don’t need any of this: use <b>Claude Code</b> instead.</div>
+      protects it. That address changes when Windows restarts; if your AI can’t connect after a restart, copy the
+      config again. With WSL’s mirrored networking you don’t need any of this: pick <b>Runs in: Windows</b> instead.</div>
   </div>
 </section>
 

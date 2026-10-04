@@ -52,6 +52,15 @@ function hostName(value: string): string {
   return i > 0 && v.indexOf(":") === i ? v.slice(0, i) : v;
 }
 
+const isWildcard = (bind: string): boolean => bind === "0.0.0.0" || bind === "::";
+
+function closeServer(srv: Server): Promise<void> {
+  return new Promise<void>((resolve) => {
+    srv.close(() => resolve());
+    srv.closeAllConnections?.();
+  });
+}
+
 const isIpLiteral = (h: string): boolean => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":");
 
 type RpcId = string | number;
@@ -61,13 +70,33 @@ const rpcIds = (body: unknown): RpcId[] =>
     return typeof id === "string" || typeof id === "number" ? [id] : [];
   });
 
+/** How often to re-check WSL adapters and retry a busy port. */
+const RECONCILE_MS = 5000;
+/** Right after a (re)start the old helper is usually still letting go of the port: retry quickly first. */
+const QUICK_RETRY_MS = 250;
+const QUICK_RETRIES = 12;
+/**
+ * Idle keep-alive sockets stay open longer than any client keeps them (Node's fetch: 4 s). With
+ * Node's default of 5 s the server could close a socket just as a client reused it, failing that
+ * request with ECONNRESET, which some clients count against the server.
+ */
+const KEEP_ALIVE_MS = 65_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 export class McpHttp {
-  private servers: Server[] = [];
+  /** The main listener, and WSL extras by address. */
+  private main: Server | null = null;
+  private extras = new Map<string, Server>();
+  private app: express.Express | null = null;
   private config: ServerConfig | null = null;
   /** Settings the open sockets were started with (config may be newer). */
   private active: ServerConfig | null = null;
+  /** Settings we want listening; kept while a busy port is being retried. */
+  private wanted: ServerConfig | null = null;
   private applying: Promise<void> = Promise.resolve();
   private applySeq = 0;
+  private timer: NodeJS.Timeout | null = null;
   /** In-flight requests by JSON-RPC id, for notifications/cancelled. */
   private inflight = new Map<RpcId, Set<AbortController>>();
   private state: HttpState = {
@@ -83,10 +112,14 @@ export class McpHttp {
 
   onChange: ((s: HttpState) => void) | null = null;
 
-  constructor(private bridge: ExtensionBridge) {}
+  constructor(
+    private bridge: ExtensionBridge,
+    /** Injectable for tests. */
+    private findWsl: () => string[] = wslAddresses,
+  ) {}
 
   get status(): HttpState {
-    return { ...this.state };
+    return { ...this.state, extraUrls: [...this.state.extraUrls] };
   }
 
   /**
@@ -102,7 +135,7 @@ export class McpHttp {
       const prev = this.active;
       if (
         prev &&
-        this.servers.length &&
+        this.main &&
         prev.port === config.port &&
         prev.bind === config.bind &&
         prev.allowWsl === config.allowWsl
@@ -111,40 +144,66 @@ export class McpHttp {
         return;
       }
       await this.stop();
-      this.active = config;
+      this.wanted = config;
+      this.startTimer();
       await this.listen(config);
+      for (let i = 0; i < QUICK_RETRIES && !this.main && this.state.error.startsWith("Port "); i++) {
+        await sleep(QUICK_RETRY_MS);
+        if (seq !== this.applySeq || this.wanted !== config) return;
+        await this.listen(config);
+      }
     };
+    return this.queue(run);
+  }
+
+  private queue(run: () => Promise<void>): Promise<void> {
     this.applying = this.applying.then(run, run);
     return this.applying;
   }
 
   async stop(): Promise<void> {
-    const servers = this.servers;
-    this.servers = [];
+    const servers = [...(this.main ? [this.main] : []), ...this.extras.values()];
+    this.main = null;
+    this.extras.clear();
     this.active = null;
+    this.wanted = null;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
     this.state.listening = false;
-    await Promise.all(
-      servers.map(
-        (srv) =>
-          new Promise<void>((resolve) => {
-            srv.close(() => resolve());
-            srv.closeAllConnections?.();
-          }),
-      ),
-    );
+    await Promise.all(servers.map(closeServer));
   }
 
   private emit(): void {
     this.onChange?.(this.status);
   }
 
+  private startTimer(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => void this.queue(() => this.reconcile()), RECONCILE_MS);
+    this.timer.unref();
+  }
+
+  /**
+   * Runs every few seconds: retry a port that was busy (an old helper still
+   * shutting down, another app that has since quit), and follow the WSL
+   * adapter, which can appear after Firefox starts or change address after
+   * sleep or a WSL restart. Exposed for tests.
+   */
+  async reconcile(): Promise<void> {
+    const want = this.wanted;
+    if (!want) return;
+    if (!this.main) {
+      if (this.state.error.startsWith("Port ")) await this.listen(want);
+      return;
+    }
+    await this.syncWsl(want);
+  }
+
   private async listen(config: ServerConfig): Promise<void> {
-    const app = this.buildApp();
-    const wildcard = config.bind === "0.0.0.0" || config.bind === "::";
+    const app = (this.app ??= this.buildApp());
+    const wildcard = isWildcard(config.bind);
     // 127.0.0.1, not "localhost": some clients resolve localhost to ::1 first.
     const host = wildcard ? "127.0.0.1" : config.bind;
-    const wsl = wslAddresses();
-    const extra = config.allowWsl && !wildcard ? wsl.filter((a) => a !== config.bind) : [];
     this.state = {
       ...this.state,
       listening: false,
@@ -152,46 +211,80 @@ export class McpHttp {
       bind: config.bind,
       url: urlFor(host, config.port),
       extraUrls: [],
-      wslAddress: wsl[0] ?? "",
       error: "",
     };
 
-    const err = await this.listenOne(app, config.port, config.bind);
-    if (err) {
+    const { srv, err } = await this.listenOne(app, config.port, config.bind);
+    if (!srv) {
+      if (err !== this.lastLogged) console.error(`[webmcp] ${err}`);
+      this.lastLogged = err;
       this.state.error = err;
-      console.error(`[webmcp] ${err}`);
       this.emit();
       return;
     }
+    this.lastLogged = "";
+    this.main = srv;
+    this.active = config;
     this.state.listening = true;
-    if (wildcard && config.allowWsl) this.state.extraUrls = wsl.map((a) => urlFor(a, config.port));
-    for (const addr of extra) {
-      const e = await this.listenOne(app, config.port, addr);
-      if (e) console.error(`[webmcp] WSL listener: ${e}`);
-      else this.state.extraUrls.push(urlFor(addr, config.port));
+    await this.syncWsl(config, true);
+  }
+  private lastLogged = "";
+
+  /** Make the WSL listeners match the adapter addresses that exist right now. */
+  private async syncWsl(config: ServerConfig, force = false): Promise<void> {
+    const all = this.findWsl();
+    const wsl = config.allowWsl ? all : [];
+    const before = JSON.stringify([this.state.extraUrls, this.state.wslAddress]);
+    this.state.wslAddress = all[0] ?? "";
+    if (isWildcard(config.bind)) {
+      // Already reachable on every address.
+      this.state.extraUrls = wsl.map((a) => urlFor(a, config.port));
+    } else {
+      const want = new Set(wsl.filter((a) => a !== config.bind));
+      for (const [addr, srv] of this.extras) {
+        if (want.has(addr)) continue;
+        this.extras.delete(addr);
+        console.error(`[webmcp] WSL address ${addr} is gone; stopped listening there`);
+        void closeServer(srv);
+      }
+      for (const addr of want) {
+        if (this.extras.has(addr)) continue;
+        const { srv, err } = await this.listenOne(this.app!, config.port, addr);
+        if (srv && this.main && this.active === config) this.extras.set(addr, srv);
+        else if (srv) void closeServer(srv);
+        else if (err !== this.lastLogged) {
+          console.error(`[webmcp] WSL listener: ${err}`);
+          this.lastLogged = err;
+        }
+      }
+      this.state.extraUrls = [...this.extras.keys()].map((a) => urlFor(a, config.port));
     }
-    this.emit();
+    if (force || JSON.stringify([this.state.extraUrls, this.state.wslAddress]) !== before) this.emit();
   }
 
-  /** Listen on one address; resolves to a human-readable error, or "" on success. */
-  private listenOne(app: express.Express, port: number, bind: string): Promise<string> {
+  /** Listen on one address; resolves to the server, or a human-readable error. */
+  private listenOne(app: express.Express, port: number, bind: string): Promise<{ srv?: Server; err: string }> {
     const srv = createServer(app);
+    srv.keepAliveTimeout = KEEP_ALIVE_MS;
+    srv.headersTimeout = KEEP_ALIVE_MS + 1000;
+    // Tool calls can legitimately take minutes (waits, slow pages); never cut one off.
+    srv.requestTimeout = 0;
     return new Promise((resolve) => {
       srv.once("error", (err: NodeJS.ErrnoException) => {
-        resolve(
-          err.code === "EADDRINUSE"
-            ? `Port ${port} is already in use (another Firefox profile, or another app). Pick a different port in settings.`
-            : err.code === "EADDRNOTAVAIL"
-              ? `Address ${bind} doesn't exist on this machine.`
-              : err.code === "EACCES"
-                ? `Not allowed to listen on ${bind}:${port}.`
-                : `Listen failed: ${err.message}`,
-        );
+        resolve({
+          err:
+            err.code === "EADDRINUSE"
+              ? `Port ${port} is already in use (another Firefox profile, or another app). Retrying every few seconds; pick a different port in settings if it stays busy.`
+              : err.code === "EADDRNOTAVAIL"
+                ? `Address ${bind} doesn't exist on this machine.`
+                : err.code === "EACCES"
+                  ? `Not allowed to listen on ${bind}:${port}.`
+                  : `Listen failed: ${err.message}`,
+        });
       });
       srv.listen(port, bind, () => {
-        this.servers.push(srv);
         console.error(`[webmcp] MCP listening on ${bind}:${port}`);
-        resolve("");
+        resolve({ srv, err: "" });
       });
     });
   }
@@ -200,7 +293,7 @@ export class McpHttp {
   private hostAllowed(host: string): boolean {
     const bind = this.active?.bind ?? this.config?.bind ?? "127.0.0.1";
     if (LOOPBACK_NAMES.has(host)) return true;
-    if (this.config?.allowWsl && wslAddresses().includes(host)) return true;
+    if (this.config?.allowWsl && this.findWsl().includes(host)) return true;
     if (isLoopbackBind(bind)) return false; // DNS rebinding: evil.example -> 127.0.0.1
     const me = os.hostname().toLowerCase();
     return isIpLiteral(host) || host === me || host === `${me}.local`;
@@ -216,7 +309,7 @@ export class McpHttp {
     }
     if (LOOPBACK_NAMES.has(h)) return true;
     const bind = this.active?.bind ?? "";
-    return (!isLoopbackBind(bind) && h === bind) || wslAddresses().includes(h);
+    return (!isLoopbackBind(bind) && h === bind) || this.findWsl().includes(h);
   }
 
   private buildApp(): express.Express {
@@ -312,8 +405,15 @@ export class McpHttp {
     };
 
     app.post("/mcp", guard, auth, json, (req: Request, res: Response) => void handle(req, res, req.body));
-    app.get("/mcp", guard, auth, (req: Request, res: Response) => void handle(req, res));
-    app.delete("/mcp", guard, auth, (req: Request, res: Response) => void handle(req, res));
+    // Stateless: there are no sessions to end and nothing to push on a standalone stream. Saying so
+    // (405) stops clients from holding a GET stream open; when that idle stream broke (helper
+    // restart, sleep, WSL network reset), clients retried twice and then marked the server failed.
+    const noStream = (_req: Request, res: Response): void => {
+      res.set("Allow", "POST");
+      rpcError(res, 405, -32000, "method not allowed: this server is stateless; use POST");
+    };
+    app.get("/mcp", guard, auth, noStream);
+    app.delete("/mcp", guard, auth, noStream);
 
     // Body-parser and other errors: answer in JSON-RPC, never with a stack trace.
     app.use((err: { type?: string; status?: number }, _req: Request, res: Response, next: NextFunction) => {

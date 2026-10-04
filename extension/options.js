@@ -9,6 +9,7 @@ var $ = function (id) { return document.getElementById(id); };
 var tokenEl = $('token'), portEl = $('port'), bindEl = $('bind'), saveEl = $('save'), formErr = $('formErr');
 var cfgEl = $('cfg');
 var kindEls = Array.prototype.slice.call(document.querySelectorAll('input[name=kind]'));
+var whereEls = Array.prototype.slice.call(document.querySelectorAll('input[name=where]'));
 var toggles = { allowWsl: $('allowWsl'), showCursor: $('showCursor'), confirmDestructive: $('confirmDestructive') };
 var pending = {};      // toggles with a save in flight: don't let a poll flip them back
 var last = null;
@@ -30,24 +31,16 @@ function toast(text, isErr) {
 }
 function errText(e) { return (e && e.message) || String(e); }
 
-/* ---- kind (which harness) ---- */
-function kind() {
-  var k = kindEls.filter(function (el) { return el.checked; })[0];
-  return k ? k.value : 'json';
+/* ---- which AI, and where it runs ---- */
+function picked(els, fallback) {
+  var el = els.filter(function (x) { return x.checked; })[0];
+  return el ? el.value : fallback;
 }
-function setKind(k) {
-  var el = kindEls.filter(function (x) { return x.value === k && !x.parentNode.hidden; })[0] ||
-    kindEls.filter(function (x) { return x.value === 'json'; })[0];
-  el.checked = true;
+function pick(els, value) {
+  els.forEach(function (x) { x.checked = x.value === value; });
 }
-
-var HINTS = {
-  claude: 'Run this in a terminal. It replaces any “firefox” server Claude Code already has.',
-  claudeWin: 'Run this in PowerShell. It replaces any “firefox” server Claude Code already has.',
-  wsl: 'Run this in your WSL terminal. It replaces any “firefox” server Claude Code already has.',
-  json: 'Add this to your client’s MCP config file, next to any servers already there.',
-  opencode: 'Merge this into opencode.json (in your project, or ~/.config/opencode/).'
-};
+function kind() { return picked(kindEls, 'json'); }
+function where() { return picked(whereEls, 'local'); }
 
 /* ---- rendering ---- */
 function renderStatus(st) {
@@ -93,20 +86,19 @@ function renderInstall(st) {
 var lastProbe = 0;
 
 function renderConnect(st) {
-  var win = !!(st.platform && st.platform.os === 'win');
-  if ($('kindWsl').hidden === win) {
-    $('kindWsl').hidden = !win;
-    if (!win && kind() === 'wsl') { setKind('claude'); F.configKind('claude'); }
-  }
-  var k = kind();
-  setText($('kindHint'), HINTS[k === 'claude' && win ? 'claudeWin' : k]);
-  setText(cfgEl, F.mcpConfig(st, k));
-  setHidden($('wsl'), k !== 'wsl');
+  var win = F.canWsl(st);
+  setHidden($('whereRow'), !win);
+  setText($('localName'), win ? 'Windows' : 'This computer');
+  if (!win && where() === 'wsl') pick(whereEls, 'local');
+  var k = kind(), w = where();
+  setText($('kindHint'), F.configHint(st, k, w));
+  setText(cfgEl, F.mcpConfig(st, k, w));
+  setHidden($('wsl'), w !== 'wsl');
   var extra = (st.host && st.host.extraUrls) || [];
   var ws = $('wslState');
   if (!st.allowWsl) {
     ws.className = 'warn';
-    setText(ws, 'Off — Claude Code in WSL can’t reach Firefox until you turn this on.');
+    setText(ws, 'Off — AIs in WSL can’t reach Firefox until you turn this on.');
   } else if (extra.length) {
     ws.className = 'ok';
     setText(ws, '✓ WSL can connect at ' + extra.join(', '));
@@ -140,6 +132,42 @@ function updateSave() {
   if (d) saveEl.dataset.dirty = '1'; else delete saveEl.dataset.dirty;
 }
 
+var eventsKey = '';
+function clock(ms) {
+  var d = new Date(ms), now = new Date();
+  var t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return d.toDateString() === now.toDateString() ? t : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + t;
+}
+function renderActivity(st) {
+  var evs = st.events || [];
+  var key = JSON.stringify(evs);
+  if (key !== eventsKey) {
+    eventsKey = key;
+    var ul = $('events');
+    ul.textContent = '';
+    if (!evs.length) {
+      var li0 = document.createElement('li');
+      li0.textContent = 'Nothing yet.';
+      ul.appendChild(li0);
+    }
+    evs.slice().reverse().forEach(function (e) {
+      var li = document.createElement('li');
+      var tm = document.createElement('time');
+      tm.dateTime = new Date(e.at).toISOString();
+      tm.textContent = clock(e.at);
+      var tx = document.createElement('span');
+      tx.className = e.level || '';
+      tx.textContent = e.text + (e.count > 1 ? ' (×' + e.count + ')' : '');
+      li.appendChild(tm);
+      li.appendChild(tx);
+      ul.appendChild(li);
+    });
+  }
+  var lf = (st.host && st.host.logFile) || '';
+  setText($('logFile'), lf);
+  setHidden($('logLine'), !lf);
+}
+
 function render(st) {
   if (!st) {
     $('dot').className = 'dot off';
@@ -153,6 +181,7 @@ function render(st) {
   renderInstall(st);
   renderConnect(st);
   renderSettings(st);
+  renderActivity(st);
 }
 
 function refresh() {
@@ -178,11 +207,23 @@ $('reveal').addEventListener('click', function () {
   this.textContent = show ? 'Hide' : 'Show';
 });
 
-setKind(F.configKind());
+pick(kindEls, F.configKind());
+pick(whereEls, F.configWhere());
 kindEls.forEach(function (el) {
   el.addEventListener('change', function () {
     F.configKind(el.value);
     if (last) renderConnect(last);
+  });
+});
+whereEls.forEach(function (el) {
+  el.addEventListener('change', function () {
+    F.configWhere(el.value);
+    if (last) renderConnect(last);
+    // Picking WSL means you want WSL to connect: switch it on rather than leave a dead config.
+    if (el.value === 'wsl' && last && !last.allowWsl) {
+      toggles.allowWsl.checked = true;
+      toggles.allowWsl.dispatchEvent(new Event('change'));
+    }
   });
 });
 
@@ -196,7 +237,7 @@ Object.keys(toggles).forEach(function (k) {
       if (res && res.error) throw new Error(res.error);
       pending[k] = false;
       render(res);
-      toast('Saved');
+      toast(k === 'allowWsl' && res.allowWsl ? 'WSL access turned on' : 'Saved');
     }).catch(function (e) {
       pending[k] = false;
       if (last) toggles[k].checked = last[k];

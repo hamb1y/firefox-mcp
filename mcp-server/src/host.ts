@@ -41,11 +41,68 @@ const LEGACY_HOST_NAME = "firefox_mcp_bridge";
 
 // ===================================================================== host
 
+/** Max log size before it's rotated to webmcp-host.log.1. */
+const LOG_MAX_BYTES = 512 * 1024;
+
+/**
+ * Copy everything the helper prints (it all goes to stderr) into a log file next to it,
+ * so a helper that stopped can say why after the fact. Returns the path, or "" if unwritable.
+ */
+function startLog(): string {
+  let file = "";
+  try {
+    const dir = installDir();
+    fs.mkdirSync(dir, { recursive: true });
+    file = path.join(dir, "webmcp-host.log");
+    const size = fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+    if (size > LOG_MAX_BYTES) fs.renameSync(file, `${file}.1`);
+    fs.appendFileSync(file, "");
+  } catch {
+    return "";
+  }
+  const stderr = console.error.bind(console);
+  let broken = false;
+  console.error = (...args: unknown[]): void => {
+    stderr(...args);
+    if (broken) return;
+    try {
+      const line = args.map((a) => (typeof a === "string" ? a : a instanceof Error ? a.stack : String(a))).join(" ");
+      fs.appendFileSync(file, `${new Date().toISOString()} [${process.pid}] ${line}\n`);
+    } catch {
+      broken = true; // disk full, folder deleted: keep running, just stop logging
+    }
+  };
+  console.log = console.info = console.warn = console.debug = console.error;
+  return file;
+}
+
+/** Ask a helper binary its version; "" if it can't be run (mid-copy, locked by a virus scan, gone). */
+function binaryVersion(exe: string): string {
+  const r = spawnSync(exe, ["--version"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
+  if (r.status !== 0) return "";
+  const m = /\d+\.\d+\.\d+\S*/.exec(`${r.stderr ?? ""}${r.stdout ?? ""}`);
+  return m ? m[0] : "";
+}
+
+/** Is a process still running? Only a definite "no such process" counts as gone. */
+function processGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
 function runHost(): void {
+  const startedAt = Date.now();
+  const logFile = startLog();
   process.on("uncaughtException", (e) => console.error(`[webmcp] uncaught: ${e?.stack ?? e}`));
   process.on("unhandledRejection", (e) => console.error(`[webmcp] unhandled: ${String(e)}`));
 
+  let exiting = false;
   const write = (obj: unknown): void => {
+    if (exiting && !("hostExit" in (obj as object))) return;
     const body = Buffer.from(JSON.stringify(obj), "utf8");
     if (body.length > MAX_HOST_MESSAGE_BYTES) {
       // Callers check first (bridge.call -> PAYLOAD_TOO_LARGE); this is the backstop.
@@ -63,7 +120,7 @@ function runHost(): void {
   const sendStatus = (): void => {
     const s = http.status;
     const msg: HostStatusMessage = {
-      hostStatus: { version: SERVER_VERSION, protocol: PROTOCOL, platform: process.platform, ...s },
+      hostStatus: { version: SERVER_VERSION, protocol: PROTOCOL, platform: process.platform, ...s, startedAt, logFile },
     };
     write(msg);
   };
@@ -131,32 +188,80 @@ function runHost(): void {
     }
   });
 
-  const shutdown = (): void => {
+  const shutdown = (why: string): void => {
+    if (exiting) return;
+    exiting = true;
+    console.error(`[webmcp] exiting: ${why} (up ${Math.round((Date.now() - startedAt) / 1000)}s)`);
     bridge.disconnect();
     void http.stop().finally(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();
   };
-  process.stdin.on("end", shutdown);
-  process.stdin.on("close", shutdown);
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  // Firefox closed the pipe: the add-on was disabled, reloaded or updated, or Firefox quit.
+  process.stdin.on("end", () => shutdown("Firefox closed the connection"));
+  process.stdin.on("close", () => shutdown("Firefox closed the connection"));
+  process.stdin.on("error", (e) => shutdown(`reading from Firefox failed: ${e.message}`));
+  // Without this, a broken pipe would leave a headless helper holding the port.
+  process.stdout.on("error", (e) => shutdown(`writing to Firefox failed: ${e.message}`));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
+  // Backstop for a parent that died without closing our pipe: never outlive Firefox.
+  // Not needed on Windows, where Firefox's job object kills us along with it.
+  const parent = process.ppid;
+  let parentMissing = 0;
+  if (parent > 1 && process.platform !== "win32") {
+    setInterval(() => {
+      parentMissing = processGone(parent) || process.ppid !== parent ? parentMissing + 1 : 0;
+      if (parentMissing >= 2) shutdown(`Firefox (pid ${parent}) is gone`);
+    }, 5000).unref();
+  }
 
   // When `install` replaces the binary we're running from, tell the add-on and
-  // exit so it relaunches the new version straight away.
+  // exit so it relaunches the new version straight away. Only a binary that
+  // reports a different version counts: virus scanners, backup tools and
+  // reinstalls of the same version touch the file too, and must not cost the
+  // user their connection.
   if (isCompiled()) {
     const exe = process.execPath;
-    const before = fs.statSync(exe, { throwIfNoEntry: false });
-    fs.watchFile(exe, { interval: 2000, persistent: false }, (cur) => {
-      if (before && cur.mtimeMs === before.mtimeMs && cur.ino === before.ino && cur.size === before.size) return;
-      if (cur.size === 0) return; // mid-write; wait for the next tick
-      console.error("[webmcp] helper binary was replaced; exiting so Firefox starts the new one");
-      const bye: HostExitMessage = { hostExit: { reason: "updated" } };
+    const same = (x: fs.Stats | undefined, y: fs.Stats | undefined): boolean =>
+      !!x && !!y && x.mtimeMs === y.mtimeMs && x.ino === y.ino && x.size === y.size;
+    let known = fs.statSync(exe, { throwIfNoEntry: false });
+    let timer: NodeJS.Timeout | undefined;
+    let seen: fs.Stats | undefined;
+    const check = (): void => {
+      timer = undefined;
+      if (exiting) return;
+      const cur = fs.statSync(exe, { throwIfNoEntry: false });
+      if (same(cur, known)) return;
+      // Missing, empty or still being written: look again shortly.
+      if (!cur || cur.size === 0 || !same(cur, seen)) {
+        seen = cur;
+        timer = setTimeout(check, 1000);
+        return;
+      }
+      const v = binaryVersion(exe);
+      if (!v) {
+        timer = setTimeout(check, 5000); // couldn't run it yet (locked by a virus scan?)
+        return;
+      }
+      known = cur;
+      if (v === SERVER_VERSION) {
+        console.error(`[webmcp] helper binary changed on disk but is still v${v}; staying up`);
+        return;
+      }
+      console.error(`[webmcp] helper binary was replaced with v${v}; exiting so Firefox starts it`);
+      const bye: HostExitMessage = { hostExit: { reason: "updated", version: v } };
       write(bye);
-      shutdown();
+      shutdown(`updated to v${v}`);
+    };
+    fs.watchFile(exe, { interval: 2000, persistent: false }, () => {
+      if (!timer) timer = setTimeout(check, 1000);
     });
   }
 
-  console.error(`[webmcp] host ${SERVER_VERSION} started (pid ${process.pid})`);
+  console.error(
+    `[webmcp] host ${SERVER_VERSION} started (pid ${process.pid}, parent ${parent}, ${process.platform}/${process.arch}, ${process.execPath})`,
+  );
 }
 
 // ================================================================ installer

@@ -218,6 +218,11 @@ export class ExtensionBridge {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         done();
+        try {
+          link.send({ cancel: id }); // don't leave it running (e.g. an act.wait) in Firefox
+        } catch {
+          /* link gone */
+        }
         reject(new BridgeError("TIMEOUT", `extension command ${method} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       timer.unref?.();

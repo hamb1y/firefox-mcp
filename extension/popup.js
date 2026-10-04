@@ -70,7 +70,7 @@ function poll() {
 }
 
 copyBtn.addEventListener('click', function () {
-  if (last) F.copy(F.mcpConfig(last, F.configKind()), copyBtn).catch(function () {});
+  if (last) F.copy(F.mcpConfig(last, F.configKind(), F.configWhere()), copyBtn).catch(function () {});
 });
 
 cursorEl.addEventListener('change', function () {

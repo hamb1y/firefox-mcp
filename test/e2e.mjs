@@ -57,6 +57,7 @@ const COOKIES = [
   { name: "chips-elsewhere", value: "3", domain: "cdn.test", partitionKey: { topLevelSite: "https://other.test" } },
 ];
 const onMsg = ev();
+let pageGone = null; // (msg) => true makes the page vanish under that message, like a navigation
 const browser = {
   runtime: {
     id: EXT_ID, getManifest: () => manifest, connectNative, onMessage: onMsg, getURL: (p = "") => "moz-extension://test-uuid/" + p,
@@ -67,6 +68,7 @@ const browser = {
     query: async () => [TAB], get: async () => TAB,
     sendMessage: async (tabId, msg) => {
       sent.push(JSON.parse(JSON.stringify(msg)));
+      if (pageGone?.(msg)) throw new Error("Message manager disconnected");
       if (msg.kind === "cursor") shotLog.push(msg.op);
       if (msg.kind === "act-wait") return new Promise(() => {}); // until cancelled
       return { __fxmcp: true, ok: true, result: msg.kind === "cursor" ? { ok: true, shown: true } : { clicked: true } };
@@ -169,6 +171,18 @@ await ask({ type: "set-config", showCursor: true });
 r = await tool("cookies_for_tab", {});
 check("cookies come from the tab's container", cookieQueries.at(-1)?.storeId === "firefox-container-2", JSON.stringify(cookieQueries.at(-1)));
 check("cookies include ones partitioned under this site only", /chips-here/.test(text(r)) && /plain/.test(text(r)) && !/chips-elsewhere/.test(text(r)), text(r));
+
+pageGone = (x) => x.kind === "act-click";
+r = await tool("act_click", { ref: 3 });
+check("click that navigates the page reports pageChanged", !r.body?.result?.isError && /pageChanged|navigated/i.test(text(r)), text(r));
+let gone = 0;
+pageGone = (x) => x.kind === "page-text" && gone++ === 0;
+r = await tool("page_text", {});
+check("read during a reload is retried", !r.body?.result?.isError && gone === 2, text(r));
+pageGone = (x) => x.kind === "act-wait";
+r = await tool("act_wait", { text: "never" });
+check("wait interrupted by navigation says so", r.body?.result?.isError && /NAVIGATED|navigated/.test(text(r)), text(r));
+pageGone = null;
 
 sent.length = 0;
 const ac = new AbortController();

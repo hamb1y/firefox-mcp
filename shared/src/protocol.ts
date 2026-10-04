@@ -200,6 +200,7 @@ export const BRIDGE_ERRORS = {
   PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE", // command exceeds the native-messaging limit
   CANCELLED: "CANCELLED", // the MCP client cancelled the request
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH", // add-on and helper speak different PROTOCOLs
+  NAVIGATED: "NAVIGATED", // the page navigated away mid-command
 } as const;
 
 // ----------------------------------------------------------- host config ---
@@ -235,6 +236,10 @@ export interface HostStatusMessage {
     error: string;
     /** MCP requests served since the host started. */
     requests: number;
+    /** When this helper process started (ms since epoch). */
+    startedAt?: number;
+    /** The helper's own log file, for troubleshooting ("" if it couldn't open one). */
+    logFile?: string;
   };
 }
 
