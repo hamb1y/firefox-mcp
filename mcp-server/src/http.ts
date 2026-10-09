@@ -143,7 +143,8 @@ export class McpHttp {
         this.emit();
         return;
       }
-      await this.stop();
+      await this.closeAll();
+      if (seq !== this.applySeq) return; // stopped or superseded while closing
       this.wanted = config;
       this.startTimer();
       await this.listen(config);
@@ -161,7 +162,13 @@ export class McpHttp {
     return this.applying;
   }
 
-  async stop(): Promise<void> {
+  /** Stop listening. Queued after any apply in progress, and cancels applies still waiting. */
+  stop(): Promise<void> {
+    this.applySeq += 1;
+    return this.queue(() => this.closeAll());
+  }
+
+  private async closeAll(): Promise<void> {
     const servers = [...(this.main ? [this.main] : []), ...this.extras.values()];
     this.main = null;
     this.extras.clear();

@@ -110,6 +110,15 @@ export function registerUnderstandTools(
           selector: args.selector,
           maxChars: args.maxChars,
         });
+        // The page already cut the HTML to maxChars: show it whole, with the page info first, not re-sliced as JSON.
+        const r = result as { html?: unknown; url?: unknown; title?: unknown; truncated?: unknown } | null;
+        if (r && typeof r.html === "string") {
+          const head = [`URL: ${String(r.url ?? "")}`, `Title: ${String(r.title ?? "")}`];
+          if (r.truncated) {
+            head.push(`Truncated to ${args.maxChars ?? 50000} chars. Pass a selector or a larger maxChars for more.`);
+          }
+          return text(`${head.join("\n")}\n\n${r.html}`);
+        }
         return text(fmt(result, args.maxChars ?? 50000));
       } catch (e) {
         return errText(e);

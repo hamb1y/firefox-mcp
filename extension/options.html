@@ -6,212 +6,216 @@
 <title>WebMCP Controller — Settings</title>
 <link rel="stylesheet" href="ui.css">
 <style>
-  body { font-size: 14px; }
-  main { max-width: 640px; margin: 0 auto; padding: 28px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
-  header { order: -3; }
+  main { max-width: 720px; margin: 0 auto; padding: 72px 16px 96px; display: flex; flex-direction: column; gap: 56px; }
+  header { display: flex; align-items: center; gap: 16px; order: -3; }
+  h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em; }
+  h2 { margin: 0; font-size: 20px; font-weight: 600; }
+  section { display: flex; flex-direction: column; gap: 24px; }
+  .card { padding: 32px; border: 1px solid var(--line); border-radius: 20px; gap: 20px; }
+
   #status { order: -2; }
-  .note { order: 2; }
-  #activity { order: 1; }
-  header { display: flex; align-items: center; gap: 12px; }
-  header h1 { font-size: 20px; margin: 0; }
-  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
-  h2 { font-size: 15px; margin: 0 0 4px; }
-  .card { border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
-  .card.attention { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
-  .lead { color: var(--muted); margin: 0 0 12px; }
-
-  #status { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 0; }
-  #status .dot { width: 12px; height: 12px; }
-  #status .txt { flex: 1; min-width: 0; }
-  #stateTxt { font-weight: 600; }
-  #stateSub { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-  #stateErr { display: block; color: var(--bad); font-size: 12px; overflow-wrap: anywhere; }
+  #status .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  #status .head { display: flex; align-items: center; gap: 14px; }
+  #status .dot { width: 14px; height: 14px; }
+  #stateTxt { font-size: 36px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.2; }
+  #stateErr { color: var(--bad); overflow-wrap: anywhere; }
   #stateErr:empty { display: none; }
+  .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+  .facts dd.mono { font: 13px/1.6 var(--mono); }
+  .facts div { min-width: 0; }
 
-  #helperLine { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  #helperLine .sub { margin: 0; }
-  .intro { margin-bottom: 8px; }
-  #setup .row { max-width: 380px; margin: 8px 0; }
-  details { margin-top: 10px; }
-  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-  details[open] summary { margin-bottom: 8px; }
-  .uninstall { font-size: 12px; color: var(--muted); margin-top: 10px; }
-  .uninstall code { word-break: break-all; }
+  #install { order: -1; gap: 16px; }
+  #install.attention { border-color: var(--lime); }
+  #install:not(.attention) { order: 1; }
 
-  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 4px 0 10px; }
-  .seg label { position: relative; cursor: pointer; }
-  .seg label + label { border-left: 1px solid var(--line); }
-  .seg input { position: absolute; opacity: 0; pointer-events: none; }
-  .seg span { display: block; padding: 6px 14px; font-size: 13px; }
-  .seg label:hover span { background: var(--panel); }
-  .seg input:checked + span { background: var(--accent); color: var(--accent-fg); }
-  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -4px; }
-  .kindHint { margin: 0 0 8px; }
-  .pick { display: flex; align-items: center; gap: 0 12px; flex-wrap: wrap; }
-  .pickLbl { width: 64px; flex: none; font-size: 13px; color: var(--muted); }
-  .pick .seg { margin: 4px 0 6px; }
-  .pick:last-of-type .seg { margin-bottom: 10px; }
-
-  .code { position: relative; }
-  .code pre {
-    margin: 0; padding: 12px 88px 12px 12px; background: var(--panel); border-radius: 8px; max-height: 260px; overflow: auto;
-    font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips label { position: relative; cursor: pointer; }
+  .chips input { position: absolute; opacity: 0; pointer-events: none; }
+  .chips span {
+    display: flex; align-items: center; height: 44px; box-sizing: border-box; padding: 0 18px; border-radius: 999px;
+    border: 1px solid var(--line); font-weight: 500;
   }
-  .code button { position: absolute; top: 8px; right: 8px; }
+  .chips label:hover span { border-color: var(--muted); }
+  .chips input:checked + span { background: var(--fg); border-color: var(--fg); color: var(--ink); font-weight: 600; }
+  .chips input:focus-visible + span { outline: 2px solid var(--lime); outline-offset: 2px; }
+  #kindHint { margin: -8px 0 0; color: var(--soft); }
+  #cfg {
+    margin: 0; padding: 24px; background: var(--surface); border-radius: 16px; max-height: 320px; overflow: auto;
+    font: 13px/1.7 var(--mono); color: #e6e6e6; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .act { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #whereRow { display: flex; align-items: center; gap: 10px; min-height: 44px; color: var(--soft); cursor: pointer; }
+  #whereRow input { accent-color: var(--fg); width: 18px; height: 18px; margin: 0; }
+  #wsl { display: flex; flex-direction: column; gap: 6px; }
+  #wslState.ok { color: var(--lime); }
+  #wslState.warn { color: var(--soft); }
 
-  #wsl { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
-  #wslState { font-size: 13px; margin: 6px 0 0 24px; }
-  #wslState.ok { color: var(--ok); }
-  #wslState.warn { color: var(--warn); }
-  #wsl .sub { margin-left: 24px; }
+  .toggles { gap: 8px; }
+  .toggles h2 { margin-bottom: 16px; }
+  label.toggle {
+    display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 18px 0;
+    border-top: 1px solid var(--line); font-size: 15px; cursor: pointer;
+  }
+  label.toggle:last-child { border-bottom: 1px solid var(--line); }
+  #wsl label.toggle { border: 0; padding: 0; min-height: 44px; }
 
-  .toggle + .sub { margin: 0 0 0 24px; }
-  .toggle ~ .toggle { margin-top: 16px; }
+  #activity { gap: 16px; }
+  #events { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow: auto; }
+  #events li { display: grid; grid-template-columns: 72px 1fr; gap: 16px; padding: 14px 0; border-top: 1px solid var(--line); }
+  #events li:last-child { border-bottom: 1px solid var(--line); }
+  #events time { color: var(--muted); font: 13px/1.6 var(--mono); font-variant-numeric: tabular-nums; }
+  #events .site, #events .count { color: var(--muted); }
+  #events .bad { color: var(--bad); }
+  #events .empty { grid-column: 1 / -1; color: var(--muted); }
 
-  .lbl { display: block; font-weight: 600; margin: 14px 0 4px; }
-  .field { display: flex; gap: 6px; flex-wrap: wrap; }
-  .field input { flex: 1 1 200px; }
+  .more { gap: 0; }
+  details { border-top: 1px solid var(--line); padding: 20px 0; }
+  details:last-child { border-bottom: 1px solid var(--line); }
+  summary { font-size: 16px; font-weight: 500; cursor: pointer; min-height: 24px; }
+  details[open] summary { margin-bottom: 20px; }
+  details .sub:first-of-type { margin-top: 0; }
+  .lbl { display: block; color: var(--muted); margin: 16px 0 6px; }
+  .lbl:first-child { margin-top: 0; }
+  .field { display: flex; gap: 8px; flex-wrap: wrap; }
+  .field input { flex: 1 1 220px; }
   input[type=password], input[type=text], input[type=number] {
-    box-sizing: border-box; width: 100%; padding: 7px 9px; font: 13px ui-monospace, monospace;
-    background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
+    box-sizing: border-box; width: 100%; height: 44px; padding: 0 14px; font: 13px var(--mono);
+    background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: 12px;
   }
-  input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   input[aria-invalid=true] { border-color: var(--bad); }
-  .grid { display: grid; grid-template-columns: 140px 1fr; gap: 0 12px; }
+  .grid { display: grid; grid-template-columns: 160px 1fr; gap: 0 12px; }
   .grid .sub { grid-column: 1 / -1; }
-  .actions { margin-top: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  button:disabled { opacity: .5; cursor: default; filter: none; }
-  button.danger { background: var(--bad); border-color: var(--bad); color: var(--accent-fg); }
+  .actions { margin-top: 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button.danger { background: var(--bad); border-color: var(--bad); color: var(--ink); font-weight: 600; }
   .formErr { color: var(--bad); font-size: 13px; }
+  #helperInfo { margin: 0; }
+  #logLine { overflow-wrap: anywhere; }
+
+  footer { font-size: 13px; color: var(--muted); line-height: 1.6; order: 2; }
+  footer a { color: var(--soft); }
 
   #toast {
-    position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
-    background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; transition: .2s;
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+    background: var(--fg); color: var(--ink); padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 500; transition: .2s;
   }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
-  #toast.err { background: var(--bad); color: #fff; }
-  #activity summary { color: var(--fg); font-size: 14px; font-weight: 600; }
-  #activity { margin-top: 0; }
-  #events { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 240px; overflow: auto; }
-  #events li { display: flex; gap: 10px; padding: 3px 0; border-top: 1px solid var(--line); }
-  #events li:first-child { border-top: 0; }
-  #events time { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
-  #events .bad { color: var(--bad); }
-  #events .ok { color: var(--ok); }
-  #logLine { font-size: 12px; color: var(--muted); margin: 10px 0 0; overflow-wrap: anywhere; }
-  .note { font-size: 12px; color: var(--muted); margin: 0; }
-  [hidden] { display: none !important; }
-  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+  #toast.err { background: var(--bad); }
+  @media (max-width: 560px) {
+    main { padding-top: 40px; gap: 40px; }
+    .card { padding: 24px; }
+    .facts, .grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 <main>
 <header>
-  <img src="icons/icon.svg" width="36" height="36" alt="">
-  <div>
-    <h1>WebMCP Controller</h1>
-    <p>Lets your own AI harness read and drive this Firefox, through a small helper app on this computer.</p>
-  </div>
+  <img src="icons/icon.svg" width="44" height="44" alt="">
+  <h1>WebMCP Controller</h1>
 </header>
 
-<div id="status" class="card" role="status">
-  <span id="dot" class="dot"></span>
-  <div class="txt"><span id="stateTxt">Loading…</span><span id="stateErr"></span><span id="stateSub"></span></div>
-  <button id="retry" type="button" hidden>Retry</button>
-</div>
-
-<section id="install" class="card">
-  <div id="helperLine"><h2 id="installTitle">Helper app</h2><span id="helperInfo" class="sub"></span></div>
-  <div id="setupNow"></div>
-  <details id="setupLater"><summary>Reinstall, update or uninstall</summary><div id="setupLaterBody"></div>
-    <div class="uninstall">
-      To uninstall, run <code id="uninstallCmd"></code>
-      · <a href="https://github.com/hamb1y/webmcp-controller/releases/latest" target="_blank" rel="noopener">All downloads</a>
+<section id="status" class="card" role="status">
+  <div class="top">
+    <div class="head"><span id="dot" class="dot"></span><span id="stateTxt">Loading…</span></div>
+    <div class="row">
+      <button id="pause" type="button" class="lime" hidden>Pause AI</button>
+      <button id="retry" type="button" hidden>Retry</button>
     </div>
+  </div>
+  <div id="stateErr"></div>
+  <dl class="facts">
+    <div><dt>Helper</dt><dd id="factHelper">—</dd></div>
+    <div><dt>Up</dt><dd id="factUp">—</dd></div>
+    <div><dt>Address</dt><dd id="factAddr" class="mono">—</dd></div>
+  </dl>
+</section>
+
+<section id="install" class="card" hidden>
+  <h2 id="installTitle">Install the helper app</h2>
+  <div id="setupNow"></div>
+</section>
+
+<section id="connect">
+  <h2>Connect your AI</h2>
+  <div class="chips" role="radiogroup" aria-label="Your AI">
+    <label><input type="radio" name="kind" value="claude"><span>Claude Code</span></label>
+    <label><input type="radio" name="kind" value="codex"><span>Codex</span></label>
+    <label><input type="radio" name="kind" value="gemini"><span>Gemini CLI</span></label>
+    <label><input type="radio" name="kind" value="opencode"><span>opencode</span></label>
+    <label><input type="radio" name="kind" value="claude-app"><span>Claude app</span></label>
+    <label><input type="radio" name="kind" value="json"><span>Other</span></label>
+  </div>
+  <p id="kindHint"></p>
+  <pre id="cfg" tabindex="0" aria-label="Config to copy"></pre>
+  <div class="act">
+    <button id="copyCfg" type="button" class="white">Copy</button>
+    <label id="whereRow"><input type="checkbox" id="inWsl"> My AI runs inside WSL</label>
+  </div>
+  <div id="wsl" hidden>
+    <label class="toggle">Let AIs in WSL connect <input type="checkbox" id="allowWsl" class="switch"></label>
+    <div id="wslState"></div>
+    <div class="sub">The first time, Windows may ask to let <b>webmcp-host</b> through the firewall: tick
+      <b>Private networks</b> and click <b>Allow</b>.</div>
+  </div>
+</section>
+
+<section class="toggles">
+  <h2>While the AI works</h2>
+  <div>
+    <label class="toggle">Show the AI cursor <input type="checkbox" id="showCursor" class="switch"></label>
+    <label class="toggle">Ask before closing tabs or deleting <input type="checkbox" id="confirmDestructive" class="switch"></label>
+  </div>
+</section>
+
+<section id="activity">
+  <h2>Activity</h2>
+  <ul id="events"></ul>
+</section>
+
+<section class="more">
+  <details id="helperDetails">
+    <summary>Helper app</summary>
+    <p id="helperInfo" class="sub"></p>
+    <p id="logLine" class="sub" hidden>Log: <code id="logFile"></code></p>
+  </details>
+  <details id="tokenDetails">
+    <summary>Token and port</summary>
+    <label class="lbl" for="token">Access token</label>
+    <div class="field">
+      <input type="password" id="token" readonly autocomplete="off" spellcheck="false">
+      <button id="reveal" type="button">Show</button>
+      <button id="copyToken" type="button">Copy</button>
+      <button id="regen" type="button">New token</button>
+    </div>
+    <div class="sub">A new token locks out every AI using the old one until you copy the config again.</div>
+    <form id="form" novalidate>
+      <div class="grid">
+        <label class="lbl" for="port">Port</label>
+        <label class="lbl" for="bind">Listen on</label>
+        <input type="number" id="port" min="1024" max="65535" inputmode="numeric">
+        <input type="text" id="bind" spellcheck="false" autocomplete="off">
+        <div class="sub"><code>127.0.0.1</code> = this computer only. <code>0.0.0.0</code> = your whole network, protected only by the token.</div>
+      </div>
+      <div class="actions">
+        <button id="save" type="submit" class="white" disabled>Save</button>
+        <button id="reset" type="button">Reset to defaults</button>
+        <span id="formErr" class="formErr" role="alert"></span>
+      </div>
+    </form>
+  </details>
+  <details id="setupLater">
+    <summary>Reinstall, update or uninstall</summary>
+    <div id="setupLaterBody"></div>
+    <div class="sub">To uninstall, run <code id="uninstallCmd"></code>
+      · <a href="https://github.com/hamb1y/webmcp-controller/releases/latest" target="_blank" rel="noopener">All downloads</a></div>
   </details>
 </section>
 
-<details id="activity" class="card">
-  <summary>Recent activity</summary>
-  <ul id="events"></ul>
-  <p id="logLine" hidden>The helper keeps a log at <code id="logFile"></code></p>
-</details>
-
-<section id="connect" class="card">
-  <h2>Connect your AI</h2>
-  <div class="pick">
-    <span class="pickLbl" id="kindLbl">Your AI</span>
-    <div class="seg" role="radiogroup" aria-labelledby="kindLbl">
-      <label><input type="radio" name="kind" value="claude"><span>Claude Code</span></label>
-      <label><input type="radio" name="kind" value="codex"><span>Codex</span></label>
-      <label><input type="radio" name="kind" value="gemini"><span>Gemini CLI</span></label>
-      <label><input type="radio" name="kind" value="opencode"><span>opencode</span></label>
-      <label><input type="radio" name="kind" value="json"><span>Other (JSON)</span></label>
-    </div>
-  </div>
-  <div class="pick" id="whereRow">
-    <span class="pickLbl" id="whereLbl">Runs in</span>
-    <div class="seg" role="radiogroup" aria-labelledby="whereLbl">
-      <label><input type="radio" name="where" value="local"><span id="localName">This computer</span></label>
-      <label><input type="radio" name="where" value="wsl"><span>WSL</span></label>
-    </div>
-  </div>
-  <p id="kindHint" class="sub kindHint"></p>
-  <div class="code">
-    <pre id="cfg" tabindex="0" aria-label="Config to copy"></pre>
-    <button id="copyCfg" type="button" class="primary">Copy</button>
-  </div>
-  <div id="wsl" hidden>
-    <label class="switch"><input type="checkbox" id="allowWsl"> Let AIs in WSL connect to this Firefox</label>
-    <div id="wslState"></div>
-    <div class="sub">The helper also listens on Windows’ WSL network adapter. The first time, Windows may ask to let
-      <b>webmcp-host</b> through the firewall: tick <b>Private networks</b> and click <b>Allow</b>. The token still
-      protects it. That address changes when Windows restarts; if your AI can’t connect after a restart, copy the
-      config again. With WSL’s mirrored networking you don’t need any of this: pick <b>Runs in: Windows</b> instead.</div>
-  </div>
-</section>
-
-<section class="card">
-  <h2>While the AI works</h2>
-  <label class="switch toggle"><input type="checkbox" id="showCursor"> Show the AI cursor</label>
-  <div class="sub">A glowing cursor glides to whatever the AI clicks, types into or reads, with a bubble saying what
-    it’s doing. It’s only a picture: it never moves your mouse, and it’s left out of screenshots.</div>
-  <label class="switch toggle"><input type="checkbox" id="confirmDestructive"> Make the AI confirm before closing tabs or deleting things</label>
-  <div class="sub">The AI must pass <code>confirm: true</code> to close tabs or windows, remove bookmarks and similar.
-    It’s a guard against mistakes, not a security boundary.</div>
-</section>
-
-<section class="card">
-  <h2>Token and port</h2>
-  <label class="lbl" for="token">Access token</label>
-  <div class="field">
-    <input type="password" id="token" readonly autocomplete="off" spellcheck="false">
-    <button id="reveal" type="button">Show</button>
-    <button id="copyToken" type="button">Copy</button>
-    <button id="regen" type="button">New token</button>
-  </div>
-  <div class="sub">Your AI sends this as <code>Authorization: Bearer …</code>. A new token locks out every harness
-    using the old one until you copy the new config into it.</div>
-
-  <form id="form" novalidate>
-    <div class="grid">
-      <label class="lbl" for="port">Port</label>
-      <label class="lbl" for="bind">Listen on</label>
-      <input type="number" id="port" min="1024" max="65535" inputmode="numeric">
-      <input type="text" id="bind" spellcheck="false" autocomplete="off">
-      <div class="sub">Change the port if another app, or a second Firefox profile, already uses it.
-        <code>127.0.0.1</code> = this computer only (recommended). <code>0.0.0.0</code> = your whole network, protected only by the token.</div>
-    </div>
-    <div class="actions">
-      <button id="save" type="submit" class="primary" disabled>Save</button>
-      <button id="reset" type="button">Reset to defaults</button>
-      <span id="formErr" class="formErr" role="alert"></span>
-    </div>
-  </form>
-</section>
-
-<p class="note">Privacy: page content, tabs, bookmarks and history go only to the helper on this computer, and from
-  there to the AI you connect. Nothing is sent anywhere else. Settings stay in this Firefox profile.</p>
+<footer><span id="addonVer"></span>MPL 2.0 · <a href="https://github.com/hamb1y/webmcp-controller" target="_blank" rel="noopener">Source</a>
+  · Cursors: <a href="https://github.com/ful1e5/Bibata_Cursor" target="_blank" rel="noopener">Bibata</a> by ful1e5, GPL-3.0
+  · Font: Google Sans Flex, OFL</footer>
 </main>
 <div id="toast" role="status" aria-live="polite"></div>
 

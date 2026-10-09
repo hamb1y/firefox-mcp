@@ -76,6 +76,7 @@ export class ExtensionBridge {
   private recentEvents: BridgeEventRecord[] = [];
   private eventWaiters: Array<{
     types: Set<BridgeEventType>;
+    afterSeq: number;
     predicate: (e: BridgeEvent) => boolean;
     resolve: (e: BridgeEventRecord) => void;
     reject: (e: Error) => void;
@@ -105,9 +106,11 @@ export class ExtensionBridge {
   connect(link: BridgeLink, hello: HelloMessage["hello"], refuse?: { code: string; message: string }): void {
     if (this.socket && this.socket !== link) {
       this.failPending("NOT_CONNECTED", "extension replaced by a new connection");
+      this.endEvents("extension replaced by a new connection while waiting for an event");
     }
     this.socket = link;
     this.refusal = refuse ?? null;
+    if (this.refusal) this.endEvents(this.refusal.message, this.refusal.code);
     this.info = {
       extensionId: hello.extensionId,
       version: hello.version,
@@ -127,12 +130,19 @@ export class ExtensionBridge {
     this.info = null;
     this.refusal = null;
     this.failPending("NOT_CONNECTED", "extension disconnected");
-    for (const w of this.eventWaiters) {
-      clearTimeout(w.timer);
-      w.reject(new BridgeError("NOT_CONNECTED", "extension disconnected while waiting for an event"));
-    }
-    this.eventWaiters = [];
+    this.endEvents("extension disconnected while waiting for an event");
     this.onStatusChange?.(false, null);
+  }
+
+  /** A connection ended: its buffered events and waiters don't carry over to the next one. */
+  private endEvents(message: string, code = "NOT_CONNECTED"): void {
+    this.recentEvents = [];
+    const waiters = this.eventWaiters;
+    this.eventWaiters = [];
+    for (const w of waiters) {
+      clearTimeout(w.timer);
+      w.reject(new BridgeError(code, message));
+    }
   }
 
   /** Feed one parsed message from the extension (response or event). */
@@ -258,7 +268,7 @@ export class ExtensionBridge {
     if (this.recentEvents.length > 200) this.recentEvents.splice(0, this.recentEvents.length - 200);
     const stillWaiting: typeof this.eventWaiters = [];
     for (const w of this.eventWaiters) {
-      if (w.types.has(evt.event)) {
+      if (w.types.has(evt.event) && record.seq > w.afterSeq) {
         try {
           if (w.predicate(evt)) {
             clearTimeout(w.timer);
@@ -291,6 +301,11 @@ export class ExtensionBridge {
   ): Promise<BridgeEventRecord> {
     const typeSet = new Set(types);
     const signal = opts.signal ?? currentSignal();
+    if (!this.socket) {
+      return Promise.reject(new BridgeError("NOT_CONNECTED", "extension not connected"));
+    }
+    if (this.refusal) return Promise.reject(new BridgeError(this.refusal.code, this.refusal.message));
+    if (signal?.aborted) return Promise.reject(new BridgeError("CANCELLED", "wait was cancelled"));
     if (opts.afterSeq !== undefined) {
       for (const r of this.recentEvents) {
         if (r.seq <= opts.afterSeq || !typeSet.has(r.event)) continue;
@@ -301,10 +316,6 @@ export class ExtensionBridge {
         }
       }
     }
-    if (!this.socket) {
-      return Promise.reject(new BridgeError("NOT_CONNECTED", "extension not connected"));
-    }
-    if (signal?.aborted) return Promise.reject(new BridgeError("CANCELLED", "wait was cancelled"));
     return new Promise((resolve, reject) => {
       const drop = (): void => {
         this.eventWaiters = this.eventWaiters.filter((w) => w.timer !== timer);
@@ -323,6 +334,7 @@ export class ExtensionBridge {
       signal?.addEventListener("abort", onAbort, { once: true });
       this.eventWaiters.push({
         types: typeSet,
+        afterSeq: opts.afterSeq ?? 0,
         predicate,
         resolve: (e) => {
           signal?.removeEventListener("abort", onAbort);

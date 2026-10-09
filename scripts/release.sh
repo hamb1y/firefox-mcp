@@ -7,15 +7,30 @@ cd "$(dirname "$0")/.."
 
 REPO="${REPO:-hamb1y/webmcp-controller}"
 TAG="v$(node -p 'require("./package.json").version')"
-OUT=dist/host
+ALL_TARGETS="windows-x64 windows-arm64 darwin-arm64 darwin-x64 linux-x64 linux-arm64"
 
 node scripts/set-version.mjs --check
 
-bash scripts/build-host.sh
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+
+# A release always carries every platform, built now, and nothing else: assemble an
+# explicit list in a fresh staging directory and upload exactly that.
+TARGETS="$ALL_TARGETS" bash scripts/build-host.sh
 bash scripts/pack-extension.sh >/dev/null
-cp scripts/install.sh scripts/install.ps1 "$OUT/"
-cp webmcp-controller.zip "$OUT/"
-(cd "$OUT" && rm -f SHA256SUMS && sha256sum webmcp-host-* install.sh install.ps1 webmcp-controller.zip > SHA256SUMS)
+OUT="$(mktemp -d)"
+trap 'rm -rf "$OUT"' EXIT
+ASSETS=()
+for t in $ALL_TARGETS; do
+  ext=""; [[ $t == windows-* ]] && ext=".exe"
+  ASSETS+=("webmcp-host-$t$ext")
+  cp "dist/host/webmcp-host-$t$ext" "$OUT/"
+done
+cp scripts/install.sh scripts/install.ps1 webmcp-controller.zip "$OUT/"
+ASSETS+=(install.sh install.ps1 webmcp-controller.zip)
+(cd "$OUT" && sha256 "${ASSETS[@]}" > SHA256SUMS)
+ASSETS+=(SHA256SUMS)
+FILES=()
+for a in "${ASSETS[@]}"; do FILES+=("$OUT/$a"); done
 
 NOTES="$(cat <<MD
 Helper app for the **WebMCP Controller** add-on.
@@ -39,8 +54,8 @@ MD
 )"
 
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-  gh release upload "$TAG" --repo "$REPO" --clobber "$OUT"/*
+  gh release upload "$TAG" --repo "$REPO" --clobber "${FILES[@]}"
 else
-  gh release create "$TAG" --repo "$REPO" --title "WebMCP Controller helper $TAG" --notes "$NOTES" "$OUT"/*
+  gh release create "$TAG" --repo "$REPO" --title "WebMCP Controller helper $TAG" --notes "$NOTES" "${FILES[@]}"
 fi
 echo "[webmcp] released $TAG → https://github.com/$REPO/releases/tag/$TAG"

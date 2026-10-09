@@ -7,7 +7,7 @@ WebMCP Controller
 webmcp-controller
 
 ## Summary (max 250 chars)
-Let your own AI agent (Claude Code, opencode, Cursor, any MCP client) read and drive this Firefox over MCP, with a live AI cursor showing what it's doing. Everything stays on your computer. Needs a small free companion helper app.
+Let your own AI agent (Claude Code, Codex, Gemini CLI, opencode, any MCP client) read and drive this Firefox over MCP, with a live AI cursor showing what it's doing. Everything stays on your computer. Needs a small free companion helper app.
 
 ## Description
 WebMCP Controller connects the Firefox you already use (your tabs, logins and bookmarks) to an AI agent running on your own computer, through the Model Context Protocol (MCP).
@@ -35,7 +35,7 @@ Safety:
 Source code for the add-on and the helper (MPL 2.0): https://github.com/hamb1y/webmcp-controller
 
 ## Categories
-Firefox: "Tabs" and "Other"
+Firefox: "Tabs"
 
 ## Support
 Website: https://github.com/hamb1y/webmcp-controller/issues

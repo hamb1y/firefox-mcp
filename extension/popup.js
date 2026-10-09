@@ -5,21 +5,21 @@
 var B = (typeof browser !== 'undefined') ? browser : chrome;
 var F = window.FxMcp;
 
-var dotEl = document.getElementById('dot');
-var stateEl = document.getElementById('state');
-var detailEl = document.getElementById('detail');
-var errEl = document.getElementById('err');
-var setupEl = document.getElementById('setup');
-var copyBtn = document.getElementById('copy');
-var cursorEl = document.getElementById('cursor');
+var $ = function (id) { return document.getElementById(id); };
+var dotEl = $('dot'), stateEl = $('state'), detailEl = $('detail'), errEl = $('err'), setupEl = $('setup');
+var copyBtn = $('copy'), pauseBtn = $('pause'), cursorEl = $('cursor');
 var last = null;
 var stepsFor = '';
+var busy = false; // a pause/resume is in flight
+
+function send(msg) { return Promise.resolve(B.runtime.sendMessage(msg)); }
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
 
 function ago(ts) {
-  var s = Math.round((Date.now() - ts) / 1000);
-  if (s < 60) return s + 's';
-  if (s < 3600) return Math.round(s / 60) + 'm';
-  return Math.round(s / 3600) + 'h';
+  var s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return s + ' s';
+  if (s < 3600) return Math.round(s / 60) + ' min';
+  return Math.round(s / 3600) + ' h';
 }
 
 function renderSteps(st, need) {
@@ -35,37 +35,54 @@ var lastRetry = 0;
 function autoRetry(st) {
   if (!st.hostMissing || Date.now() - lastRetry < 3000) return;
   lastRetry = Date.now();
-  B.runtime.sendMessage({ type: 'probe' }).catch(function () {});
+  send({ type: 'probe' }).catch(function () {});
+}
+
+function renderNow(st) {
+  var n = st.now;
+  $('now').hidden = !st.listening || !n;
+  if (!n) return;
+  $('nowLbl').className = n.active ? 'live' : '';
+  setText($('nowLbl'), n.active ? 'Now' : 'Last · ' + ago(n.at) + ' ago');
+  setText($('nowText'), n.text);
+  setText($('nowSite'), n.site || '');
+}
+
+function renderPause(st) {
+  pauseBtn.hidden = !st.listening && !st.paused;
+  setText($('pauseTxt'), st.paused ? 'Resume AI' : 'Pause AI');
+  $('pauseIcon').style.display = st.paused ? 'none' : '';
+  $('playIcon').style.display = st.paused ? '' : 'none';
 }
 
 function render(st) {
-  st = st || {};
+  if (!st || st.error) return;
   last = st;
   var sum = F.summarize(st);
   dotEl.className = 'dot ' + sum.cls;
-  stateEl.textContent = sum.text;
-  errEl.textContent = st.listening ? '' : ((st.host && st.host.error) || (st.hostMissing ? '' : st.lastError) || '');
+  setText(stateEl, sum.text);
+  setText(errEl, st.listening ? '' : ((st.host && st.host.error) || (st.hostMissing ? '' : st.lastError) || ''));
   var need = F.setupNeed(st);
   setupEl.hidden = !need;
   if (need) renderSteps(st, need);
   autoRetry(st);
   copyBtn.hidden = !st.listening;
+  $('retry').hidden = !!st.listening;
+  if (!busy) renderPause(st);
+  renderNow(st);
   if (document.activeElement !== cursorEl) cursorEl.checked = st.showCursor !== false;
-  var lines = [];
-  if (st.listening) {
-    lines.push(F.mcpUrl(st));
-    lines.push('up ' + ago(st.connectedAt) + ' · ' + (st.commands || 0) + ' commands · helper v' + ((st.host && st.host.version) || '?'));
-    if (st.host && st.host.extraUrls && st.host.extraUrls.length) lines.push('WSL: ' + st.host.extraUrls.join(', '));
-  }
-  detailEl.textContent = lines.join('\n');
+  var bits = [];
+  if (st.host && st.host.version) bits.push('Helper v' + st.host.version);
+  if (st.listening) bits.push('up ' + ago(st.connectedAt), (st.commands || 0) + ' commands');
+  setText(detailEl, bits.join(' · '));
 }
 
 function poll() {
-  Promise.resolve(B.runtime.sendMessage({ type: 'get-status' }))
+  send({ type: 'get-status' })
     .then(render)
     .catch(function (e) {
-      stateEl.textContent = 'Status error';
-      errEl.textContent = String((e && e.message) || e);
+      setText(stateEl, 'Status error');
+      setText(errEl, String((e && e.message) || e));
     });
 }
 
@@ -73,19 +90,38 @@ copyBtn.addEventListener('click', function () {
   if (last) F.copy(F.mcpConfig(last, F.configKind(), F.configWhere()), copyBtn).catch(function () {});
 });
 
+pauseBtn.addEventListener('click', function () {
+  if (!last || busy) return;
+  busy = true;
+  send({ type: 'set-paused', paused: !last.paused })
+    .then(function (st) { busy = false; render(st); })
+    .catch(function (e) { busy = false; setText(errEl, String((e && e.message) || e)); });
+});
+
 cursorEl.addEventListener('change', function () {
-  Promise.resolve(B.runtime.sendMessage({ type: 'set-config', showCursor: cursorEl.checked })).then(render).catch(function () {});
+  send({ type: 'set-config', showCursor: cursorEl.checked }).then(render).catch(function () {});
 });
 
-document.getElementById('retry').addEventListener('click', function () {
-  stateEl.textContent = 'Retrying…';
-  Promise.resolve(B.runtime.sendMessage({ type: 'reconnect' })).then(render).catch(function () {});
+$('retry').addEventListener('click', function () {
+  setText(stateEl, 'Retrying…');
+  send({ type: 'reconnect' }).then(render).catch(function () {});
 });
 
-document.getElementById('open').addEventListener('click', function () {
+function openSettings(ev) {
+  ev.preventDefault();
   B.runtime.openOptionsPage();
   window.close();
-});
+}
+$('open').addEventListener('click', openSettings);
+$('gear').addEventListener('click', openSettings);
+
+/* Show the real pause shortcut, which the user may have changed in about:addons. */
+Promise.resolve(B.commands && B.commands.getAll ? B.commands.getAll() : [])
+  .then(function (cmds) {
+    var c = (cmds || []).filter(function (x) { return x.name === 'toggle-pause'; })[0];
+    if (c && c.shortcut) setText($('shortcut'), 'Shortcut: ' + c.shortcut.replace(/Period$/, '.') + ' pauses');
+  })
+  .catch(function () {});
 
 poll();
 setInterval(poll, 1000);

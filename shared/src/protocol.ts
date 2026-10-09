@@ -201,6 +201,8 @@ export const BRIDGE_ERRORS = {
   CANCELLED: "CANCELLED", // the MCP client cancelled the request
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH", // add-on and helper speak different PROTOCOLs
   NAVIGATED: "NAVIGATED", // the page navigated away mid-command
+  NOT_INTERACTABLE: "NOT_INTERACTABLE", // target is inert or behind a modal dialog
+  PAUSED: "PAUSED", // the user paused AI control in the add-on
 } as const;
 
 // ----------------------------------------------------------- host config ---

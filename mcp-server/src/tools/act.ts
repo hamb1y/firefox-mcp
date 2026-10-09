@@ -87,7 +87,9 @@ export function registerActTools(
         selector: selectorField,
         generation: generationField,
         text: z.string().describe("Text to type"),
-        submit: z.boolean().optional().describe("Submit after typing, once: in a form, clicks its submit button (or submits it); outside a form (chat boxes), presses Enter and only if the page ignores it clicks the box's own Send button. Result says how (`submitted`), or `submitted:false` with a note."),
+        submit: z.boolean().optional().describe("Submit after typing, once. In a form: clicks its submit button (or submits it), unless a field fails validation. Outside a form (chat boxes): clicks the box's own Send button if there is exactly one, otherwise presses Enter once. Result says how (`submitted`); `submitted:false` comes with a note, so check the page before retrying."),
+        submitRef: z.number().int().positive().optional().describe("Ref of the button to click to submit (implies submit). Use when the page has several Send/Submit buttons."),
+        submitSelector: z.string().optional().describe("CSS selector of the button to click to submit (alternative to submitRef)"),
       },
     },
     async (args) => {
@@ -101,6 +103,8 @@ export function registerActTools(
           generation: args.generation,
           text: args.text,
           submit: args.submit,
+          submitRef: args.submitRef,
+          submitSelector: args.submitSelector,
         }),
       );
     },
@@ -129,7 +133,9 @@ export function registerActTools(
           .min(1)
           .describe("Fields to fill (at least one)"),
         generation: generationField,
-        submit: z.boolean().optional().describe("Submit the form after filling (same rules as act_type)"),
+        submit: z.boolean().optional().describe("Submit after filling, once (same rules as act_type)"),
+        submitRef: z.number().int().positive().optional().describe("Ref of the button to click to submit (implies submit). Use when the page has several Send/Submit buttons."),
+        submitSelector: z.string().optional().describe("CSS selector of the button to click to submit (alternative to submitRef)"),
       },
     },
     async (args) =>
@@ -139,6 +145,8 @@ export function registerActTools(
           fields: args.fields,
           generation: args.generation,
           submit: args.submit,
+          submitRef: args.submitRef,
+          submitSelector: args.submitSelector,
         }),
       ),
   );
@@ -297,7 +305,9 @@ export function registerActTools(
   server.registerTool(
     "act_find",
     {
-      description: "Find text on the page (returns match locations/count).",
+      description:
+        "Find visible text on the page (case-insensitive). Returns up to 20 matches with their element, " +
+        "`count` of all occurrences, and `truncated` when there were more.",
       inputSchema: {
         tabId: tabIdField,
         query: z.string().describe("Text to find"),

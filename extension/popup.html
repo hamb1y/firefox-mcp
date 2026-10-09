@@ -5,28 +5,72 @@
 <title>WebMCP Controller</title>
 <link rel="stylesheet" href="ui.css">
 <style>
-  body { width: 320px; padding: 14px; }
-  h1 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
-  #detail { font-size: 12px; color: var(--muted); margin: 0 0 10px; word-break: break-all; white-space: pre-line; }
-  #err { font-size: 12px; color: var(--bad); margin: 0 0 10px; }
-  #err:empty, [hidden] { display: none !important; }
-  #setup { font-size: 12px; margin: 0 0 12px; }
-  #setup .row { margin: 6px 0; }
-  #copy { width: 100%; margin-bottom: 8px; }
-  #cursorRow { font-weight: normal; margin: 0 0 10px; }
+  body { width: 360px; }
+  main { box-sizing: border-box; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; }
+  #gear { width: 44px; height: 44px; padding: 0; border: 0; margin-right: -10px; }
+  #gear:hover { background: var(--surface); }
+  .status { display: flex; flex-direction: column; gap: 10px; padding-top: 8px; }
+  .status .head { display: flex; align-items: center; gap: 12px; }
+  #state { font-size: 30px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.2; }
+  #detail { font-size: 14px; color: var(--muted); line-height: 1.6; word-break: break-all; white-space: pre-line; }
+  #detail:empty, #err:empty { display: none; }
+  #err { font-size: 13px; color: var(--bad); word-break: break-word; }
+  #setup { font-size: 13px; }
+  #setup .row > * { flex: 1; }
+  #now { display: flex; flex-direction: column; gap: 8px; padding: 18px; border: 1px solid var(--line); border-radius: 20px; }
+  #nowLbl { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  #nowLbl.live { color: var(--lime); }
+  #nowText { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+  #nowSite { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  #nowSite:empty { display: none; }
+  .buttons { display: flex; flex-direction: column; gap: 10px; }
+  .buttons button { height: 48px; font-size: 15px; width: 100%; }
+  label.toggle { display: flex; align-items: center; justify-content: space-between; min-height: 44px; font-size: 15px; cursor: pointer; }
+  footer { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--muted); }
+  footer a { text-decoration: none; }
 </style>
 </head>
 <body>
-<h1><span id="dot" class="dot"></span><span id="state">Checking…</span></h1>
-<div id="err"></div>
-<div id="detail"></div>
-<div id="setup" hidden></div>
-<button id="copy" type="button" class="primary" hidden>Copy MCP config</button>
-<label class="switch" id="cursorRow" title="Show where the AI is acting, and what it says it’s doing"><input type="checkbox" id="cursor"> Show AI cursor</label>
-<div class="row">
-  <button id="retry" type="button">Retry</button>
-  <button id="open" type="button">Settings</button>
+<main>
+<header>
+  <span class="brand"><img src="icons/icon.svg" width="24" height="24" alt="">WebMCP</span>
+  <button id="gear" type="button" aria-label="Settings" title="Settings">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f5f5f5" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>
+  </button>
+</header>
+
+<div class="status" role="status">
+  <div class="head"><span id="dot" class="dot"></span><span id="state">Checking…</span></div>
+  <div id="detail"></div>
+  <div id="err"></div>
 </div>
+
+<div id="setup" hidden></div>
+
+<div id="now" hidden>
+  <div id="nowLbl">Now</div>
+  <div id="nowText"></div>
+  <div id="nowSite"></div>
+</div>
+
+<div class="buttons">
+  <button id="pause" type="button" class="lime" hidden>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="#0a0a0a" aria-hidden="true"><g id="pauseIcon"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></g><path id="playIcon" d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z" style="display:none"/></svg>
+    <span id="pauseTxt">Pause AI</span>
+  </button>
+  <button id="copy" type="button" hidden>Copy MCP config</button>
+  <button id="retry" type="button" hidden>Retry</button>
+</div>
+
+<label class="toggle">Show AI cursor <input type="checkbox" id="cursor" class="switch"></label>
+
+<footer>
+  <span id="shortcut"></span>
+  <a id="open" href="#">Settings →</a>
+</footer>
+</main>
 <script src="common.js"></script>
 <script src="popup.js"></script>
 </body>

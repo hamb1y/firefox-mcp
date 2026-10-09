@@ -261,7 +261,7 @@ function buildSnapshot(compact, maxChars) {
           var name = computeName(el, tag);
           var node = { ref: 0, role: role, name: name };
           var flags = [];
-          if (el.disabled) { node.disabled = true; flags.push('[disabled]'); }
+          if (isDisabled(el)) { node.disabled = true; flags.push('[disabled]'); }
           else if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') { node.disabled = true; flags.push('[disabled]'); }
           if (tag === 'INPUT') {
             var it = String(el.type || 'text').toLowerCase();
@@ -386,6 +386,30 @@ function assertEnabled(el, what) {
   if (isDisabled(el)) throw be('ELEMENT_DISABLED', describe(el) + ' is disabled; ' + what + ' would do nothing.');
 }
 
+/* Is `anc` an ancestor of `el` in the flat tree (crossing shadow roots)? */
+function flatContains(anc, el) {
+  for (var n = el; n; n = flatParent(n)) if (n === anc) return true;
+  return false;
+}
+
+/* In an inert subtree, or outside an open modal dialog: no user can reach it. */
+function isInert(el) {
+  for (var n = el; n; n = flatParent(n)) {
+    if (n.hasAttribute && n.hasAttribute('inert')) return true;
+  }
+  var modal = null;
+  try { modal = document.querySelector('dialog:modal'); } catch (e) {}
+  return !!(modal && !flatContains(modal, el));
+}
+
+function assertActionable(el, what) {
+  if (!el.isConnected) throw be('REF_STALE', describe(el) + ' was removed from the page. Take a new snapshot_ax.');
+  assertEnabled(el, what);
+  if (isInert(el)) {
+    throw be('NOT_INTERACTABLE', describe(el) + ' is inert (behind a modal dialog or in an inert region), so a user couldn\'t reach it; ' + what + ' was not done.');
+  }
+}
+
 function mouseEvent(type, opts) {
   var init = { bubbles: true, cancelable: true, composed: true, view: window };
   if (opts) for (var k in opts) init[k] = opts[k];
@@ -410,7 +434,7 @@ function refOf(el, msg) {
 
 function doClick(msg, target) {
   var el = target || mustResolve(msg);
-  assertEnabled(el, 'clicking it');
+  assertActionable(el, 'clicking it');
   var button = (msg.button || 'left').toLowerCase();
   var btnCode = button === 'middle' ? 1 : (button === 'right' ? 2 : 0);
   try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) {}
@@ -426,6 +450,10 @@ function doClick(msg, target) {
   try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) {} }
   ptr('pointerup');
   el.dispatchEvent(mouseEvent('mouseup', pos));
+  // The page's pointer handlers ran: it may have removed or disabled the element.
+  if (!el.isConnected || isDisabled(el)) {
+    return { clicked: false, ref: refOf(el, msg), note: 'The page ' + (el.isConnected ? 'disabled' : 'removed') + ' the element while it was being pressed, so the click didn\'t complete.' };
+  }
   if (btnCode === 2) {
     el.dispatchEvent(mouseEvent('contextmenu', pos));
   } else if (btnCode === 1) {
@@ -483,6 +511,7 @@ function editableTarget(el) {
   if ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.readOnly) {
     throw be('NOT_EDITABLE', describe(el) + ' is read-only.');
   }
+  if (isInert(el)) throw be('NOT_INTERACTABLE', describe(el) + ' is inert (behind a modal dialog or in an inert region).');
   return el;
 }
 
@@ -494,6 +523,13 @@ function parseChecked(v) {
   if (TRUE_WORDS[s]) return true;
   if (FALSE_WORDS[s]) return false;
   throw be('INVALID_PARAMS', 'A checkbox or radio takes true/false (or on/off, yes/no, checked/unchecked), not ' + JSON.stringify(String(v)) + '.');
+}
+
+/* Disabled itself or by its <optgroup>. */
+function optionDisabled(o) {
+  if (o.disabled) return true;
+  var g = o.parentElement;
+  return !!(g && g.tagName === 'OPTGROUP' && g.disabled);
 }
 
 /* Indices of the <option>s to select: exact value, then exact label, then the
@@ -515,13 +551,14 @@ function matchOptions(el, values) {
     ];
     for (var t = 0; t < tests.length; t++) {
       for (var i = 0; i < opts.length; i++) {
-        if (!opts[i].disabled && tests[t](opts[i])) { out.push(i); return; }
+        if (!optionDisabled(opts[i]) && tests[t](opts[i])) { out.push(i); return; }
       }
     }
     var avail = [];
     for (var j = 0; j < opts.length && avail.length < 30; j++) {
       var l = label(opts[j]);
-      avail.push(JSON.stringify(opts[j].value) + (l && l !== opts[j].value ? ' (' + l + ')' : ''));
+      avail.push(JSON.stringify(opts[j].value) + (l && l !== opts[j].value ? ' (' + l + ')' : '') +
+        (optionDisabled(opts[j]) ? ' [disabled]' : ''));
     }
     throw be('NO_MATCH', 'No option matches ' + JSON.stringify(v) + ' in ' + describe(el) + '. Options: ' +
       avail.join(', ') + (opts.length > 30 ? ', …' : '') + '.');
@@ -622,16 +659,19 @@ function setValue(el, text) {
 
 /* ---------------------------------------------------------------- submit */
 
-/* Dispatch a key down/press/up on el. Returns true if the page cancelled keydown. */
+/* Dispatch a key down/press/up on el. Returns true if the page cancelled keydown or keypress. */
 function keySequence(el, key, init) {
   var opts = Object.assign({ key: key, bubbles: true, cancelable: true, composed: true }, init || {});
   var down = new KeyboardEvent('keydown', opts);
   el.dispatchEvent(down);
-  if (!down.defaultPrevented && (key.length === 1 || key === 'Enter')) {
-    el.dispatchEvent(new KeyboardEvent('keypress', opts));
+  var handled = down.defaultPrevented;
+  if (!handled && (key.length === 1 || key === 'Enter')) {
+    var press = new KeyboardEvent('keypress', opts);
+    el.dispatchEvent(press);
+    handled = press.defaultPrevented;
   }
   el.dispatchEvent(new KeyboardEvent('keyup', opts));
-  return down.defaultPrevented;
+  return handled;
 }
 
 function pressEnter(el) {
@@ -662,10 +702,27 @@ function formSubmitButton(form) {
 
 var SEND_LABEL = /^(send|submit|post|reply|search|go|ask)\b|send (message|prompt)|submit/i;
 
-/* A Send-like button in the field's own composer (chat apps often have no
-   <form>). Climbs a few ancestors but stops before one that holds another
-   field, so it never reaches a different form's button. */
+var REGION_SEL = 'form, main, aside, nav, header, footer, section, article, dialog, [role="main"], [role="complementary"], ' +
+  '[role="navigation"], [role="region"], [role="dialog"], [role="search"], [role="banner"], [role="contentinfo"]';
+
+/* The nearest landmark/section/form/dialog around el, or null. */
+function regionOf(el) {
+  for (var n = flatParent(el); n; n = flatParent(n)) {
+    try { if (n.matches(REGION_SEL)) return n; } catch (e) {}
+  }
+  return null;
+}
+
+function buttonLabel(b) {
+  return (b.getAttribute('aria-label') || b.title || b.value || b.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+/* The Send-like button in the field's own composer (chat apps often have no
+ * <form>). Climbs a few ancestors, never past the field's region or a level
+ * holding another field, and ignores buttons that belong to some form.
+ * Returns {button}, {ambiguous: [descriptions]} or null. */
 function composerButton(el) {
+  var region = regionOf(el);
   var p = el;
   for (var i = 0; i < 8; i++) {
     p = flatParent(p);
@@ -677,40 +734,125 @@ function composerButton(el) {
       if (n !== el && !el.contains(n) && !n.contains(el) && isEditableField(n) && visible(n)) { other = true; break; }
     }
     if (other) break;
+    var found = [];
     var cands = p.querySelectorAll('button, [role="button"], input[type="submit"]');
     for (var j = 0; j < cands.length; j++) {
       var b = cands[j];
-      if (b === el || isDisabled(b) || b.getAttribute('aria-disabled') === 'true' || !visible(b)) continue;
+      if (b === el || !visible(b) || isInert(b)) continue;
+      if (b.form || (b.closest && b.closest('form'))) continue;
       var tid = b.getAttribute('data-testid') || '';
-      var name = (b.getAttribute('aria-label') || b.title || b.value || b.textContent || '').trim();
-      if (SEND_LABEL.test(name) || /send-button|submit-button/i.test(tid)) return b;
+      if (SEND_LABEL.test(buttonLabel(b)) || /send-button|submit-button/i.test(tid)) found.push(b);
     }
+    if (found.length === 1) return { button: found[0] };
+    if (found.length > 1) {
+      return { ambiguous: found.slice(0, 5).map(function (b) { return describe(b) + quoted(buttonLabel(b)); }) };
+    }
+    if (p === region) break;
   }
   return null;
 }
 
-/* Submit like a user would, using exactly one mechanism so nothing is sent
- * twice. In a form: click its submit button (or requestSubmit if it has none).
- * Outside a form (chat composers): Enter; only if the page plainly ignored it
- * (didn't cancel the key, field and URL unchanged) click the composer's own
- * Send button. Returns {submitted, via?, note?}. */
-async function submitField(el) {
+/* Apps often enable the button only after reacting to the input event. */
+async function whenEnabled(b, msg) {
+  for (var t = 0; t < 10 && (isDisabled(b) || ariaDisabled(b)); t++) {
+    await sleep(100);
+    checkCancel(msg);
+  }
+  return !isDisabled(b) && !ariaDisabled(b);
+}
+
+/* The first field that would block submission, like the browser checks it. */
+function invalidField(form, btn) {
+  if (form.noValidate || (btn && btn.formNoValidate)) return null;
+  var els = form.elements;
+  for (var i = 0; i < els.length; i++) {
+    var f = els[i];
+    if (f.willValidate && f.validity && !f.validity.valid) return f;
+  }
+  return null;
+}
+
+/* Click a submit button; any failure becomes a note (the text is already typed). */
+function clickSubmit(btn) {
+  try {
+    var r = doClick({}, btn);
+    if (r.clicked === false) return { submitted: false, note: r.note };
+  } catch (e) {
+    return { submitted: false, note: e.message };
+  }
+  return { submitted: 'button', via: describe(btn) };
+}
+
+/* An explicit submit button from msg.submitRef / msg.submitSelector, or null. */
+function submitTarget(msg) {
+  var hasRef = msg.submitRef !== undefined && msg.submitRef !== null && msg.submitRef !== '';
+  if (!hasRef && !msg.submitSelector) return null;
+  try {
+    return mustResolve({ ref: hasRef ? msg.submitRef : undefined, selector: msg.submitSelector, generation: msg.generation });
+  } catch (e) {
+    throw be(e.code || 'INVALID_PARAMS', 'Submit target: ' + e.message + ' Nothing was typed.');
+  }
+}
+
+/* Submit like a user would, using exactly one mechanism chosen up front, so
+ * nothing is ever sent twice:
+ *  - an explicit submit button (submitRef/submitSelector): click it;
+ *  - in a form: click its submit button, or requestSubmit if it has none;
+ *  - outside a form (chat composers): click the composer's own Send button,
+ *    or press Enter once if there is none.
+ * Returns {submitted, via?, note?}. */
+async function submitField(el, msg, explicit) {
+  msg = msg || {};
+  checkCancel(msg);
+  if (explicit) {
+    if (!(await whenEnabled(explicit, msg))) {
+      return { submitted: false, note: describe(explicit) + ' stayed disabled; the page may consider the input incomplete.' };
+    }
+    return clickSubmit(explicit);
+  }
   var form = el.form || (el.closest && el.closest('form'));
   if (form) {
     var btn = formSubmitButton(form);
-    if (btn) {
-      // Apps often enable the button only after reacting to the input event.
-      for (var t = 0; t < 10 && isDisabled(btn); t++) await sleep(100);
-      if (isDisabled(btn)) {
-        return { submitted: false, note: 'The form\'s submit button (' + describe(btn) + ') is disabled; the page may consider the form incomplete.' };
-      }
-      doClick({}, btn);
-      return { submitted: 'button', via: describe(btn) };
+    if (btn && !(await whenEnabled(btn, msg))) {
+      return { submitted: false, note: 'The form\'s submit button (' + describe(btn) + ') is disabled; the page may consider the form incomplete.' };
     }
-    if (typeof form.requestSubmit === 'function') form.requestSubmit();
-    else form.submit();
-    return { submitted: 'form' };
+    var bad = invalidField(form, btn);
+    if (bad) {
+      var badName = shortName(bad);
+      return { submitted: false, note: describe(bad) + (badName && badName !== '#' + bad.id ? quoted(badName) : '') + ' is invalid' +
+        (bad.validationMessage ? ' (' + bad.validationMessage + ')' : '') + ', so the form wasn\'t submitted.' };
+    }
+    checkCancel(msg);
+    var fired = false;
+    var onSubmit = function (e) { if (e.target === form) fired = true; };
+    window.addEventListener('submit', onSubmit, true);
+    form.addEventListener('submit', onSubmit, true); // forms in shadow roots
+    var out;
+    try {
+      if (btn) out = clickSubmit(btn);
+      else if (typeof form.requestSubmit === 'function') { form.requestSubmit(); out = { submitted: 'form' }; }
+      else { form.submit(); return { submitted: 'form' }; }
+    } finally {
+      window.removeEventListener('submit', onSubmit, true);
+      form.removeEventListener('submit', onSubmit, true);
+    }
+    if (out.submitted && !fired) {
+      out.note = 'No submit event fired, so the page handled the click itself or ignored it. Check the page before retrying.';
+    }
+    return out;
   }
+  var cb = composerButton(el);
+  if (cb && cb.ambiguous) {
+    return { submitted: false, note: 'Several Send-like buttons are next to this field: ' + cb.ambiguous.join(', ') +
+      '. Pass submitRef (or submitSelector) to pick one.' };
+  }
+  if (cb) {
+    if (!(await whenEnabled(cb.button, msg))) {
+      return { submitted: false, note: describe(cb.button) + ' stayed disabled; the page may consider the input incomplete.' };
+    }
+    return clickSubmit(cb.button);
+  }
+  checkCancel(msg);
   var before = fieldText(el);
   var url = location.href;
   var handled = pressEnter(el);
@@ -718,27 +860,25 @@ async function submitField(el) {
   if (handled || location.href !== url || !el.isConnected || fieldText(el) !== before) {
     return { submitted: 'enter' };
   }
-  var send = composerButton(el);
-  if (send) {
-    doClick({}, send);
-    return { submitted: 'button', via: describe(send) };
-  }
   return {
     submitted: false,
-    note: 'Pressed Enter but the page didn\'t react, and there is no form or Send button next to this field. Find the right button with snapshot_ax and use act_click.'
+    note: 'Pressed Enter once but saw no reaction (field and URL unchanged), and there is no form or Send button next to this field. ' +
+      'Check the page with snapshot_ax before retrying, since it may still be sending; to use a button, pass submitRef.'
   };
 }
 
 async function doType(msg) {
   var el = editableTarget(mustResolve(msg));
   var text = (msg.text === undefined || msg.text === null) ? '' : String(msg.text);
+  var explicit = submitTarget(msg);
+  checkCancel(msg);
   setValue(el, text);
   var out = { typed: true, ref: refOf(el, msg) };
   if (isTextField(el) && inputType(el) !== 'password' && fieldText(el) !== text.trim()) {
     out.value = fieldText(el).slice(0, 200);
     out.note = 'The page changed the value after typing.';
   }
-  if (msg.submit) Object.assign(out, await submitField(el));
+  if (msg.submit || explicit) Object.assign(out, await submitField(el, msg, explicit));
   return out;
 }
 
@@ -758,16 +898,24 @@ async function doFillForm(msg) {
       throw be(e.code || 'INVALID_PARAMS', 'fields[' + i + ']: ' + e.message + ' Nothing was filled.');
     }
   });
+  var explicit = submitTarget(msg);
   for (var i = 0; i < targets.length; i++) {
     try {
-      setValue(targets[i], fields[i].value === undefined || fields[i].value === null ? '' : String(fields[i].value));
+      checkCancel(msg);
+      // Earlier writes can make the page re-render: find the field again.
+      var f = fields[i];
+      var v = f.value === undefined || f.value === null ? '' : String(f.value);
+      var el = editableTarget(mustResolve({ ref: f.ref, selector: f.selector, generation: msg.generation }));
+      checkValue(el, v);
+      setValue(el, v);
+      targets[i] = el;
     } catch (e) {
       throw be(e.code || 'INTERNAL', 'fields[' + i + ']: ' + e.message + ' Filled ' + i + ' of ' + targets.length +
         ' fields before this one; the rest were not changed.');
     }
   }
   var out = { filled: targets.length };
-  if (msg.submit) Object.assign(out, await submitField(targets[targets.length - 1]));
+  if (msg.submit || explicit) Object.assign(out, await submitField(targets[targets.length - 1], msg, explicit));
   return out;
 }
 
@@ -776,7 +924,7 @@ function doSelect(msg) {
   if (el.tagName !== 'SELECT') {
     throw be('INVALID_PARAMS', describe(el) + ' is not a <select>. For custom dropdowns, act_click to open it, then act_click the option.');
   }
-  assertEnabled(el, 'selecting');
+  assertActionable(el, 'selecting');
   var idx = matchOptions(el, (msg.values || []).map(String));
   try { el.focus(); } catch (e) {}
   selectIndices(el, idx);
@@ -925,6 +1073,19 @@ function normalizeMods(mods) {
   return out;
 }
 
+/* The focused element, inside open shadow roots too. */
+function deepActive() {
+  var a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  return a;
+}
+
+/* Would a real keystroke edit el now? (The page's handlers may have moved
+   focus, disabled or removed it.) */
+function canEdit(el) {
+  return el.isConnected && !isDisabled(el) && !el.readOnly && !isInert(el) && deepActive() === el;
+}
+
 /* Focusable elements in tab order (positive tabindex first, then DOM order). */
 function tabOrder() {
   var all = document.querySelectorAll('a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable=""], [contenteditable="true"]');
@@ -977,7 +1138,7 @@ function deleteText(el, forward) {
 /* Synthetic key events are untrusted, so the browser runs none of a key's
  * default actions. After the page's handlers run (and didn't cancel the key),
  * perform the common ones ourselves and say what happened. */
-async function keyDefault(key, mods, el) {
+async function keyDefault(key, mods, el, msg) {
   var tag = el.tagName;
   var type = inputType(el);
   var text = isTextField(el);
@@ -999,38 +1160,44 @@ async function keyDefault(key, mods, el) {
     }
     case 'Enter':
       if (tag === 'TEXTAREA' || el.isContentEditable) {
+        if (!canEdit(el)) return '';
         if (el.isContentEditable) { try { document.execCommand(mods.shiftKey ? 'insertLineBreak' : 'insertParagraph'); } catch (e) {} }
         else insertText(el, '\n');
         return 'inserted a new line';
       }
       if (tag === 'A' || tag === 'BUTTON' || tag === 'SUMMARY' || type === 'submit' || type === 'button' || type === 'reset' ||
           type === 'image' || el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link') {
-        assertEnabled(el, 'activating it');
+        assertActionable(el, 'activating it');
         el.click();
         return 'activated ' + describe(el);
       }
       if (tag === 'INPUT' && (el.form || el.closest('form'))) {
-        var r = await submitField(el);
+        var r = await submitField(el, msg);
         return r.submitted ? 'submitted the form' + (r.via ? ' via ' + r.via : '') : (r.note || '');
       }
       return '';
     case ' ':
-      if (text) { insertText(el, ' '); return 'typed a space'; }
+      if (text) { if (!canEdit(el)) return ''; insertText(el, ' '); return 'typed a space'; }
       if (tag === 'BUTTON' || type === 'checkbox' || type === 'radio' || type === 'submit' || type === 'button' ||
           el.getAttribute('role') === 'button' || el.getAttribute('role') === 'checkbox' || el.getAttribute('role') === 'switch') {
-        assertEnabled(el, 'activating it');
+        assertActionable(el, 'activating it');
         el.click();
         return 'activated ' + describe(el);
       }
       scrollBy(0, (mods.shiftKey ? -1 : 1) * Math.round(window.innerHeight * 0.9));
       return 'scrolled the page';
     case 'Backspace': case 'Delete':
-      if (text && !el.readOnly) return deleteText(el, key === 'Delete') ? 'deleted text' : '';
+      if (text && canEdit(el)) return deleteText(el, key === 'Delete') ? 'deleted text' : '';
       return '';
     case 'ArrowUp': case 'ArrowDown':
       if (tag === 'SELECT' && !el.multiple) {
-        var ni = el.selectedIndex + (key === 'ArrowDown' ? 1 : -1);
-        if (ni >= 0 && ni < el.options.length) { selectIndices(el, [ni]); return 'selected ' + JSON.stringify(el.options[ni].text.trim()); }
+        if (isDisabled(el)) return '';
+        var step = key === 'ArrowDown' ? 1 : -1;
+        for (var ni = el.selectedIndex + step; ni >= 0 && ni < el.options.length; ni += step) {
+          if (optionDisabled(el.options[ni])) continue;
+          selectIndices(el, [ni]);
+          return 'selected ' + JSON.stringify(el.options[ni].text.trim());
+        }
         return '';
       }
       if (text) return '';
@@ -1064,7 +1231,7 @@ async function keyDefault(key, mods, el) {
       return 'scrolled to the ' + (key === 'Home' ? 'top' : 'bottom');
   }
   if (key.length === 1 || (key.length === 2 && /[\uD800-\uDBFF]/.test(key[0]))) {
-    if (text && !el.readOnly) { insertText(el, mods.shiftKey ? key.toUpperCase() : key); return 'typed ' + JSON.stringify(key); }
+    if (text && canEdit(el)) { insertText(el, mods.shiftKey ? key.toUpperCase() : key); return 'typed ' + JSON.stringify(key); }
   }
   return '';
 }
@@ -1073,9 +1240,7 @@ async function doKey(msg) {
   var raw = String(msg.key);
   var key = KEY_ALIASES[raw.toLowerCase()] || raw;
   var mods = normalizeMods(msg.modifiers);
-  var target = document.activeElement || document.body;
-  // Focus inside open shadow roots.
-  while (target && target.shadowRoot && target.shadowRoot.activeElement) target = target.shadowRoot.activeElement;
+  var target = deepActive() || document.body;
   var init = Object.assign({}, mods);
   if (KEY_CODES[key] !== undefined) { init.keyCode = KEY_CODES[key]; init.which = KEY_CODES[key]; init.code = key === ' ' ? 'Space' : key; }
   else if (key.length === 1) {
@@ -1086,18 +1251,19 @@ async function doKey(msg) {
   var combo = ['ctrlKey', 'altKey', 'shiftKey', 'metaKey'].filter(function (m) { return mods[m]; })
     .map(function (m) { return { ctrlKey: 'Ctrl', altKey: 'Alt', shiftKey: 'Shift', metaKey: 'Meta' }[m]; })
     .concat([key === ' ' ? 'Space' : key]).join('+');
-  // keydown first; the default action (if any) runs between keydown and keyup.
-  var down = new KeyboardEvent('keydown', Object.assign({ key: key, bubbles: true, cancelable: true, composed: true }, init));
+  var opts = Object.assign({ key: key, bubbles: true, cancelable: true, composed: true }, init);
+  // keydown (and keypress) first; the default action runs between them and keyup.
+  var down = new KeyboardEvent('keydown', opts);
   target.dispatchEvent(down);
-  var effect = '';
-  if (down.defaultPrevented) effect = 'handled by the page';
-  else {
-    if (key.length === 1 && !mods.ctrlKey && !mods.metaKey && !mods.altKey) {
-      target.dispatchEvent(new KeyboardEvent('keypress', Object.assign({ key: key, bubbles: true, cancelable: true, composed: true }, init)));
-    }
-    effect = await keyDefault(key, mods, target);
+  var handled = down.defaultPrevented;
+  var printable = key.length === 1 || /^[\uD800-\uDBFF][\uDC00-\uDFFF]$/.test(key);
+  if (!handled && (printable || key === 'Enter') && !mods.ctrlKey && !mods.metaKey && !mods.altKey) {
+    var press = new KeyboardEvent('keypress', opts);
+    target.dispatchEvent(press);
+    handled = press.defaultPrevented;
   }
-  target.dispatchEvent(new KeyboardEvent('keyup', Object.assign({ key: key, bubbles: true, cancelable: true, composed: true }, init)));
+  var effect = handled ? 'handled by the page' : await keyDefault(key, mods, target, msg);
+  target.dispatchEvent(new KeyboardEvent('keyup', opts));
   return {
     pressed: combo,
     target: target === document.body ? 'page' : describe(target),
@@ -1105,7 +1271,11 @@ async function doKey(msg) {
   };
 }
 
-var cancelled = new Set(); // opIds the background asked us to stop
+var cancelled = new Set(); // opIds the background asked us to stop (expire after 2 min)
+
+function checkCancel(msg) {
+  if (msg && msg.opId && cancelled.has(String(msg.opId))) throw be('CANCELLED', 'The command was cancelled.');
+}
 
 function sleep(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
 
@@ -1116,11 +1286,17 @@ async function doWait(msg) {
   var start = Date.now();
   var wantText = (msg.text !== undefined && msg.text !== null && String(msg.text) !== '') ? String(msg.text).toLowerCase() : null;
   var wantSel = msg.selector ? String(msg.selector) : null;
+  if (wantSel) {
+    try { document.querySelector(wantSel); } catch (e) { throw be('INVALID_PARAMS', 'Bad selector: ' + wantSel); }
+  }
   if (!wantText && !wantSel) {
-    await sleep(Math.min(timeoutMs, 1000));
+    var until = start + Math.min(timeoutMs, 1000);
+    for (var left; (left = until - Date.now()) > 0;) { checkCancel(msg); await sleep(Math.min(100, left)); }
+    checkCancel(msg);
     return { found: true, elapsedMs: Date.now() - start };
   }
   for (;;) {
+    checkCancel(msg);
     var ok = false;
     try {
       if (wantSel && document.querySelector(wantSel)) ok = true;
@@ -1128,35 +1304,39 @@ async function doWait(msg) {
     } catch (e) {}
     if (ok) return { found: true, elapsedMs: Date.now() - start };
     if (Date.now() - start >= timeoutMs) return { found: false, elapsedMs: Date.now() - start };
-    if (msg.opId && cancelled.has(msg.opId)) { cancelled.delete(msg.opId); throw be('CANCELLED', 'act.wait was cancelled'); }
     await sleep(100);
   }
 }
 
+/* Visible text matches: up to 20 with snippets, and how many there are in all. */
 function doFind(msg) {
-  var q = String(msg.query).toLowerCase();
-  var matches = [];
-  var walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, null);
-  var n = walker.currentNode;
-  while (n && matches.length < 20) {
+  var q = String(msg.query === undefined || msg.query === null ? '' : msg.query).toLowerCase();
+  if (!q) throw be('INVALID_PARAMS', 'act.find needs a query');
+  var root = document.body || document.documentElement;
+  var matches = [], count = 0;
+  var shown = new Map(); // parent element -> visible?
+  if (!root) return { matches: matches, count: 0, truncated: false };
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+    var parent = n.parentElement;
+    if (!parent || SKIP_TAGS[parent.tagName]) continue;
     var val = n.nodeValue || '';
-    var idx = val.toLowerCase().indexOf(q);
-    if (idx >= 0 && val.trim()) {
-      var start = Math.max(0, idx - 30);
-      var snippet = val.slice(start, idx + q.length + 30).replace(/\s+/g, ' ').trim();
-      var parent = n.parentElement;
-      var ref;
-      if (parent) {
-        var r = elToRef.get(parent);
-        if (r !== undefined) ref = r;
-      }
-      var m = { snippet: snippet };
-      if (ref !== undefined) m.ref = ref;
+    var low = val.toLowerCase();
+    var idx = low.indexOf(q);
+    if (idx < 0) continue;
+    var vis = shown.get(parent);
+    if (vis === undefined) { vis = visible(parent); shown.set(parent, vis); }
+    if (!vis) continue;
+    for (; idx >= 0; idx = low.indexOf(q, idx + q.length)) {
+      count++;
+      if (matches.length >= 20) continue;
+      var m = { snippet: val.slice(Math.max(0, idx - 30), idx + q.length + 30).replace(/\s+/g, ' ').trim() };
+      var r = elToRef.get(parent);
+      if (r !== undefined) m.ref = r;
       matches.push(m);
     }
-    n = walker.nextNode();
   }
-  return { matches: matches, count: matches.length };
+  return { matches: matches, count: count, truncated: count > matches.length };
 }
 
 /* -------------------------------------------------------------- AI cursor */
@@ -1179,6 +1359,14 @@ function ensureVisible(el) {
   if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) {
     try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) {}
   }
+}
+
+/* A field whose contents shouldn't be shown in the cursor bubble. */
+function isSecret(el) {
+  if (!el || !el.getAttribute) return false;
+  if (inputType(el) === 'password') return true;
+  if (/password|one-time-code/i.test(el.getAttribute('autocomplete') || '')) return true;
+  try { return !!(el.querySelector && el.querySelector('input[type="password"]')); } catch (e) { return false; }
 }
 
 /* Before an action: glide the cursor to its target and say what's happening.
@@ -1208,31 +1396,37 @@ async function cursorBefore(msg) {
   var dflt;
   switch (msg.kind) {
     case 'act-click': dflt = 'Clicking' + quoted(name); break;
-    case 'act-type':
-      dflt = el && String(el.type).toLowerCase() === 'password' ? 'Typing a password' : 'Typing' + quoted(msg.text);
+    case 'act-type': {
+      var field = null;
+      try { field = el && editableTarget(el); } catch (e) {}
+      dflt = !el ? 'Typing' : (isSecret(el) || isSecret(field)) ? 'Typing a password' : 'Typing' + quoted(msg.text);
       break;
+    }
     case 'act-fillForm': dflt = 'Filling in a form'; break;
     case 'act-select': dflt = 'Choosing' + quoted((msg.values || []).join(', ')); break;
     case 'act-hover': dflt = 'Hovering over' + quoted(name); break;
     case 'act-scroll':
       dflt = el ? 'Scrolling to' + quoted(name) : msg.to ? 'Scrolling to the ' + msg.to : 'Scrolling ' + String(msg.direction || 'down');
       break;
-    case 'act-key': dflt = 'Pressing ' + String(msg.key); break;
+    case 'act-key': dflt = isSecret(deepActive()) ? 'Pressing a key' : 'Pressing ' + String(msg.key); break;
     case 'act-wait': dflt = 'Waiting for' + (quoted(msg.text || msg.selector) || ' the page'); break;
     case 'act-find': dflt = 'Looking for' + quoted(msg.query); break;
     default: dflt = 'Reading the page';
   }
+  var shape = msg.kind === 'act-click' ? 'hand'
+    : (msg.kind === 'act-type' || msg.kind === 'act-fillForm') ? 'text'
+    : msg.kind === 'act-wait' ? 'wait' : 'arrow';
   if (el) {
     ensureVisible(el);
-    await C.moveTo(el, note || dflt);
+    await C.moveTo(el, note || dflt, shape);
   } else {
-    C.say(note || dflt);
+    C.say(note || dflt, shape);
   }
 }
 
-function cursorAfter(msg) {
+function cursorAfter(msg, result) {
   var C = window.__fxmcpCursor;
-  if (msg.cursor && C && msg.kind === 'act-click') C.click();
+  if (msg.cursor && C && msg.kind === 'act-click' && result && result.clicked) C.click();
 }
 
 function cursorCommand(msg) {
@@ -1259,11 +1453,15 @@ async function handleMessage(msg) {
     if (msg.opId) { cancelled.add(String(msg.opId)); setTimeout(function () { cancelled.delete(String(msg.opId)); }, 120000); }
     return { ok: true };
   }
+  checkCancel(msg);
   if (msg.cursor) await cursorBefore(msg);
+  checkCancel(msg); // the glide takes a moment
+  var result = null;
   try {
-    return await dispatch(msg);
+    result = await dispatch(msg);
+    return result;
   } finally {
-    if (msg.cursor) cursorAfter(msg); // also on failure, or the cursor stays busy
+    if (msg.cursor) cursorAfter(msg, result);
   }
 }
 
@@ -1276,8 +1474,10 @@ async function dispatch(msg) {
     case 'page-text': {
       var mc = (msg.maxChars !== undefined && Number.isFinite(Number(msg.maxChars))) ? Number(msg.maxChars) : 50000;
       var t = '';
-      try { t = (document.body && document.body.innerText) || document.documentElement.textContent || ''; }
-      catch (e) { t = ''; }
+      try {
+        var tr = document.body || document.documentElement;
+        t = tr ? tr.innerText || '' : '';
+      } catch (e) { t = ''; }
       t = String(t);
       var trunc = t.length > mc;
       return { text: trunc ? t.slice(0, mc) : t, truncated: trunc, url: location.href, title: document.title || '' };

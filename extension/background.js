@@ -52,6 +52,7 @@ var CONTENT_METHODS = /^(page\.(snapshot|text|html)|act\.)/;
 var NO_NOTE_METHODS = /^(tab\.(create|update|close|duplicate)|nav\.|window\.|sessions\.restore|page\.shot)/;
 
 var CFG = { token: '', port: DEFAULT_PORT, bind: DEFAULT_BIND, allowWsl: false, confirmDestructive: true, showCursor: true };
+var paused = false;        // the user paused AI control: every command is refused until they resume
 var port = null;           // runtime.Port to the native helper
 var backoffIdx = 0;
 var connectTimer = null;
@@ -62,13 +63,15 @@ var hostRestarting = false; // helper said it's exiting to make way for an updat
 var lastError = '';        // human-readable reason for the popup/options page
 var connectedAt = 0;
 var events = [];          // recent helper ups and downs, newest last, for the settings page
-var EVENTS_MAX = 30;
+var EVENTS_MAX = 60;
 
 /* Remember what happened to the helper, so "it stopped working" can be traced afterwards. */
-function note(text, level) {
+function note(text, level, site) {
   var lastEv = events[events.length - 1];
-  if (lastEv && lastEv.text === text) { lastEv.at = Date.now(); lastEv.count = (lastEv.count || 1) + 1; return; }
-  events.push({ at: Date.now(), text: text, level: level || 'info' });
+  if (lastEv && lastEv.text === text && (lastEv.site || '') === (site || '')) {
+    lastEv.at = Date.now(); lastEv.count = (lastEv.count || 1) + 1; return;
+  }
+  events.push({ at: Date.now(), text: text, level: level || 'info', site: site || '' });
   if (events.length > EVENTS_MAX) events.splice(0, events.length - EVENTS_MAX);
 }
 var inflight = new Map();  // command id -> AbortController, for { cancel: id }
@@ -259,6 +262,8 @@ async function sendToTab(tabId, p, msg) {
     try {
       return unwrapContentResponse(await call(B.tabs, 'sendMessage', tabId, msg));
     } catch (e2) {
+      // An answer from the page (e.g. REF_STALE) or a page that navigated isn't a missing script.
+      if ((e2 && e2.code) || PAGE_GONE_RE.test(String((e2 && e2.message) || e2))) throw e2;
       throw be('NO_CONTENT_SCRIPT', 'No content script in tab ' + tabId + ' (restricted page?)');
     }
   }
@@ -284,6 +289,21 @@ async function sendToPage(tabId, p, msg) {
     }
     if (msg.kind === 'act-wait') throw be('NAVIGATED', 'The page navigated away while waiting; take a new snapshot');
     return { done: true, pageChanged: true, note: 'The page navigated or reloaded as a result; take a new snapshot before using refs' };
+  }
+}
+
+/* sendToPage for an action, cancellable: a cancel from the helper (or Pause AI) reaches the page by opId. */
+async function actOn(tabId, p, ctx, msg) {
+  if (ctx.signal.aborted) throw be('CANCELLED', 'The command was cancelled.');
+  msg.opId = ctx.id;
+  var stop = function () {
+    try { call(B.tabs, 'sendMessage', tabId, { kind: 'cancel', opId: ctx.id }).catch(function () {}); } catch (e) {}
+  };
+  ctx.signal.addEventListener('abort', stop);
+  try {
+    return await sendToPage(tabId, p, msg);
+  } finally {
+    ctx.signal.removeEventListener('abort', stop);
   }
 }
 
@@ -632,79 +652,73 @@ var handlers = {
   },
 
   /* ---- acting (content script does the DOM work) ---- */
-  'act.click': async function (p) {
+  'act.click': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, { kind: 'act-click', ref: p.ref, selector: p.selector, generation: p.generation, button: p.button || 'left' });
+    return await actOn(tab.id, p, ctx, { kind: 'act-click', ref: p.ref, selector: p.selector, generation: p.generation, button: p.button || 'left' });
   },
-  'act.type': async function (p) {
+  'act.type': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, {
+    return await actOn(tab.id, p, ctx, {
       kind: 'act-type', ref: p.ref, selector: p.selector, generation: p.generation,
       text: (p.text === undefined || p.text === null) ? '' : String(p.text),
-      submit: !!p.submit
+      submit: !!p.submit, submitRef: p.submitRef, submitSelector: p.submitSelector
     });
   },
-  'act.fillForm': async function (p) {
+  'act.fillForm': async function (p, ctx) {
     if (!Array.isArray(p.fields)) throw be('INVALID_PARAMS', 'act.fillForm requires fields[]');
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, { kind: 'act-fillForm', fields: p.fields, generation: p.generation, submit: !!p.submit });
+    return await actOn(tab.id, p, ctx, {
+      kind: 'act-fillForm', fields: p.fields, generation: p.generation,
+      submit: !!p.submit, submitRef: p.submitRef, submitSelector: p.submitSelector
+    });
   },
-  'act.select': async function (p) {
+  'act.select': async function (p, ctx) {
     if (!Array.isArray(p.values)) throw be('INVALID_PARAMS', 'act.select requires values[]');
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, {
+    return await actOn(tab.id, p, ctx, {
       kind: 'act-select', ref: p.ref, selector: p.selector, generation: p.generation,
       values: p.values.map(String)
     });
   },
-  'act.hover': async function (p) {
+  'act.hover': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, { kind: 'act-hover', ref: p.ref, selector: p.selector, generation: p.generation });
+    return await actOn(tab.id, p, ctx, { kind: 'act-hover', ref: p.ref, selector: p.selector, generation: p.generation });
   },
-  'act.scroll': async function (p) {
+  'act.scroll': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, {
+    return await actOn(tab.id, p, ctx, {
       kind: 'act-scroll', ref: p.ref, selector: p.selector, generation: p.generation,
       direction: p.direction, pixels: p.pixels, to: p.to
     });
   },
-  'act.key': async function (p) {
+  'act.key': async function (p, ctx) {
     if (p.key === undefined || p.key === null || p.key === '') {
       throw be('INVALID_PARAMS', 'act.key requires key');
     }
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, { kind: 'act-key', key: String(p.key), modifiers: p.modifiers });
+    return await actOn(tab.id, p, ctx, { kind: 'act-key', key: String(p.key), modifiers: p.modifiers });
   },
   'act.wait': async function (p, ctx) {
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    var stop = function () {
-      call(B.tabs, 'sendMessage', tab.id, { kind: 'cancel', opId: ctx.id }).catch(function () {});
-    };
-    ctx.signal.addEventListener('abort', stop);
-    try {
-      return await sendToPage(tab.id, p, {
-        kind: 'act-wait', text: p.text, selector: p.selector, opId: ctx.id,
-        timeoutMs: num(p.timeoutMs, 10000)
-      });
-    } finally {
-      ctx.signal.removeEventListener('abort', stop);
-    }
+    return await actOn(tab.id, p, ctx, {
+      kind: 'act-wait', text: p.text, selector: p.selector, timeoutMs: num(p.timeoutMs, 10000)
+    });
   },
-  'act.find': async function (p) {
+  'act.find': async function (p, ctx) {
     if (p.query === undefined || p.query === null || String(p.query) === '') {
       throw be('INVALID_PARAMS', 'act.find requires query');
     }
     var tab = await resolveTab(p.tabId);
     assertContentAllowed(tab);
-    return await sendToPage(tab.id, p, { kind: 'act-find', query: String(p.query) });
+    return await actOn(tab.id, p, ctx, { kind: 'act-find', query: String(p.query) });
   },
 
   /* ---- browser data ---- */
@@ -758,14 +772,21 @@ var handlers = {
         throw e;
       }
     }
-    var host = '';
-    try { host = new URL(url).hostname; } catch (e) {}
+    var host = '', scheme = '';
+    try { var u = new URL(url); host = u.hostname; scheme = u.protocol; } catch (e) {}
+    var under = function (d) { return host === d || host.endsWith('.' + d); };
     return (cookies || []).filter(function (c) {
+      // First-party isolation: keep only the jar of this tab's own site, not cookies it set as a third party elsewhere.
+      var fpd = c.firstPartyDomain;
+      if (fpd) {
+        var m = /^\((\w+),([^,)]+)/.exec(fpd); // "(https,example.com[,port])" when isolating by scheme too
+        if (m ? (m[1] + ':' !== scheme || !under(m[2])) : !under(fpd)) return false;
+      }
       var site = c.partitionKey && c.partitionKey.topLevelSite;
       if (!site) return true;
       try {
-        var h = new URL(site).hostname;
-        return host === h || host.endsWith('.' + h);
+        var su = new URL(site);
+        return su.protocol === scheme && under(su.hostname);
       } catch (e) {
         return false;
       }
@@ -780,12 +801,61 @@ var handlers = {
   }
 };
 
+/* What each method looks like to the user: [while running, in the activity log]. */
+var LABELS = {
+  'tabs.list': ['Listing tabs', 'Listed tabs'], 'tabs.query': ['Looking through tabs', 'Looked through tabs'],
+  'windows.list': ['Listing windows', 'Listed windows'], 'active.tab': ['Checking the current tab', 'Checked the current tab'],
+  'tab.create': ['Opening a tab', 'Opened a tab'], 'tab.update': ['Opening a page', 'Opened a page'],
+  'tab.close': ['Closing a tab', 'Closed a tab'], 'tab.duplicate': ['Duplicating a tab', 'Duplicated a tab'],
+  'tab.move': ['Moving a tab', 'Moved a tab'], 'tab.pin': ['Pinning a tab', 'Pinned a tab'],
+  'tab.unpin': ['Unpinning a tab', 'Unpinned a tab'], 'tab.mute': ['Muting a tab', 'Changed a tab’s sound'],
+  'window.create': ['Opening a window', 'Opened a window'], 'window.focus': ['Switching windows', 'Switched windows'],
+  'window.remove': ['Closing a window', 'Closed a window'],
+  'nav.back': ['Going back', 'Went back'], 'nav.forward': ['Going forward', 'Went forward'], 'nav.reload': ['Reloading', 'Reloaded'],
+  'page.snapshot': ['Reading the page', 'Read the page'], 'page.text': ['Reading the page', 'Read the page'],
+  'page.html': ['Reading the page source', 'Read the page source'], 'page.shot': ['Taking a screenshot', 'Took a screenshot'],
+  'page.info': ['Checking the page', 'Checked the page'],
+  'act.click': ['Clicking', 'Clicked'], 'act.type': ['Typing', 'Typed'], 'act.fillForm': ['Filling in a form', 'Filled in a form'],
+  'act.select': ['Choosing an option', 'Chose an option'], 'act.hover': ['Pointing at something', 'Pointed at something'],
+  'act.scroll': ['Scrolling', 'Scrolled'], 'act.key': ['Pressing a key', 'Pressed a key'], 'act.wait': ['Waiting for the page', 'Waited for the page'],
+  'act.find': ['Searching the page', 'Searched the page'],
+  'bookmarks.search': ['Searching bookmarks', 'Searched bookmarks'], 'bookmarks.create': ['Adding a bookmark', 'Added a bookmark'],
+  'bookmarks.remove': ['Removing a bookmark', 'Removed a bookmark'], 'history.search': ['Searching history', 'Searched history'],
+  'downloads.list': ['Checking downloads', 'Checked downloads'], 'cookies.forTab': ['Reading cookies', 'Read cookies'],
+  'sessions.recentlyClosed': ['Checking closed tabs', 'Checked closed tabs'], 'sessions.restore': ['Reopening a tab', 'Reopened a tab'],
+  'cursor.say': ['Talking', 'Said something']
+};
+/* Methods that act on one tab, so "Now" can say which. */
+var TAB_METHODS = /^(page\.|act\.|nav\.|cookies\.|tab\.(update|close|duplicate|move|pin|unpin|mute)$|cursor\.say$)/;
+var now = null; // { text, past, site, tabId, at, done }
+
+function siteOf(url) {
+  try { var u = new URL(url); return /^https?:$/.test(u.protocol) ? u.hostname.replace(/^www\./, '') : ''; } catch (e) { return ''; }
+}
+
 async function onCommand(cmd, ctx) {
   var handler = handlers[cmd.method];
   if (!handler) throw be('UNKNOWN_METHOD', 'Unknown method: ' + cmd.method);
   var params = (cmd.params && typeof cmd.params === 'object') ? cmd.params : {};
   cmdCount += 1;
-  var result = await handler(params, ctx);
+  var label = LABELS[cmd.method] || [cmd.method, cmd.method];
+  var cur = now = { text: label[0], past: label[1], site: '', tabId: null, at: Date.now(), done: false };
+  if (TAB_METHODS.test(cmd.method)) {
+    resolveTab(params.tabId).then(function (t) { cur.site = siteOf(t.url); cur.tabId = t.id; }).catch(function () {});
+  }
+  updateBadge();
+  try {
+    var result = await handler(params, ctx);
+  } catch (e) {
+    var be0 = toBridgeError(e);
+    if (be0.code !== 'CANCELLED') note(label[0] + ' failed: ' + be0.message, 'bad', cur.site);
+    throw e;
+  } finally {
+    cur.done = true;
+    cur.at = Date.now();
+    updateBadge();
+  }
+  if (!/^(tabs\.list|windows\.list|active\.tab|page\.info|cursor\.say)$/.test(cmd.method)) note(label[1], 'act', cur.site);
   noteAfter(cmd.method, params);
   return result;
 }
@@ -833,6 +903,10 @@ async function handleIncoming(msg) {
     var cs = compat().state;
     if (cs === 'helper-old' || cs === 'addon-old') {
       send({ id: msg.id, ok: false, error: { code: 'PROTOCOL_MISMATCH', message: lastError } });
+      return;
+    }
+    if (paused) {
+      send({ id: msg.id, ok: false, error: { code: 'PAUSED', message: 'The user paused AI control in WebMCP Controller. Ask them to resume it (toolbar button → Resume AI), then try again.' } });
       return;
     }
     var ac = new AbortController();
@@ -1013,17 +1087,22 @@ function isListening() {
   return !!(isConnected() && hostStatus && hostStatus.listening && isCompatible());
 }
 
-/* Toolbar badge: nothing when serving MCP, "!" otherwise. */
+/* Toolbar badge: lime dot while the AI is acting, "II" when paused, "!" when not serving, "↑" for a helper update. */
 function updateBadge() {
   var ba = B.browserAction;
   if (!ba) return;
   var on = isListening();
   var update = on && compat().state === 'helper-update';
-  var why = on ? 'serving ' + hostStatus.url + (update ? ' (helper update available)' : '')
+  var busy = on && inflight.size > 0;
+  var why = paused ? 'AI paused'
+    : on ? (busy && now ? now.text : 'serving ' + hostStatus.url) + (update ? ' (helper update available)' : '')
     : (lastError || (port ? 'starting helper…' : 'not connected'));
+  var text = paused ? 'II' : !on ? '!' : busy ? '●' : update ? '↑' : '';
+  var bg = paused ? '#f5f5f5' : !on ? (hostMissing ? '#8a8a8a' : '#c50042') : '#D7F75B';
   try {
-    ba.setBadgeText({ text: on ? (update ? '↑' : '') : '!' });
-    ba.setBadgeBackgroundColor({ color: update ? '#2563eb' : hostMissing ? '#b45309' : '#c50042' });
+    ba.setBadgeText({ text: text });
+    ba.setBadgeBackgroundColor({ color: bg });
+    if (ba.setBadgeTextColor) ba.setBadgeTextColor({ color: !on && !paused ? '#ffffff' : '#0a0a0a' });
     ba.setTitle({ title: 'WebMCP Controller — ' + why });
   } catch (e) {}
 }
@@ -1113,7 +1192,7 @@ function validBind(v) {
 async function loadConfig() {
   var got = {};
   try {
-    got = (await call(B.storage.local, 'get', ['mcpToken', 'mcpPort', 'mcpBind', 'mcpAllowWsl', 'mcpConfirm', 'mcpShowCursor'])) || {};
+    got = (await call(B.storage.local, 'get', ['mcpToken', 'mcpPort', 'mcpBind', 'mcpAllowWsl', 'mcpConfirm', 'mcpShowCursor', 'mcpPaused'])) || {};
   } catch (e) {}
   CFG.token = (typeof got.mcpToken === 'string' && got.mcpToken.length >= 16) ? got.mcpToken : '';
   CFG.port = validPort(got.mcpPort) || DEFAULT_PORT;
@@ -1121,6 +1200,7 @@ async function loadConfig() {
   CFG.allowWsl = got.mcpAllowWsl === true;
   CFG.confirmDestructive = got.mcpConfirm !== false;
   CFG.showCursor = got.mcpShowCursor !== false;
+  paused = got.mcpPaused === true;
   if (!CFG.token) {
     CFG.token = randomToken();
     try { await call(B.storage.local, 'set', { mcpToken: CFG.token }); } catch (e) {}
@@ -1149,6 +1229,8 @@ function statusSnapshot() {
     allowWsl: CFG.allowWsl,
     confirmDestructive: CFG.confirmDestructive,
     showCursor: CFG.showCursor,
+    paused: paused,
+    now: now && { text: now.done ? now.past : now.text, site: now.site, tabId: now.tabId, at: now.at, active: !now.done },
     defaults: { port: DEFAULT_PORT, bind: DEFAULT_BIND },
     lastError: lastError,
     connectedAt: connectedAt,
@@ -1168,6 +1250,33 @@ function applyConfig() {
 function fromOwnPage(sender) {
   var base = B.runtime.getURL('');
   return !!(sender && sender.id === B.runtime.id && typeof sender.url === 'string' && sender.url.indexOf(base) === 0);
+}
+
+/* Settings writes run one at a time, and each is saved before it takes effect, so a failed save
+ * leaves the running config and storage in agreement. */
+var cfgQueue = Promise.resolve();
+function queued(fn) {
+  var r = cfgQueue.then(fn);
+  cfgQueue = r.catch(function () {});
+  return r.catch(function (e) { return { error: 'Couldn’t save settings: ' + ((e && e.message) || e) }; });
+}
+
+function setPaused(v) {
+  return queued(async function () {
+    await call(B.storage.local, 'set', { mcpPaused: v });
+    if (paused === v) return statusSnapshot();
+    paused = v;
+    note(v ? 'You paused the AI' : 'You resumed the AI', v ? 'bad' : 'ok');
+    if (v) { abortInflight(); hideCursors(); }
+    updateBadge();
+    return statusSnapshot();
+  });
+}
+
+if (B.commands && B.commands.onCommand) {
+  B.commands.onCommand.addListener(function (name) {
+    if (name === 'toggle-pause') setPaused(!paused);
+  });
 }
 
 if (B.runtime && B.runtime.onMessage) {
@@ -1195,31 +1304,40 @@ if (B.runtime && B.runtime.onMessage) {
       if (msg.port !== undefined && !p) return Promise.resolve({ error: 'Port must be a number between 1024 and 65535' });
       var b = msg.bind !== undefined ? validBind(msg.bind) : '';
       if (msg.bind !== undefined && !b) return Promise.resolve({ error: 'Bind address must be an IP like 127.0.0.1 or 0.0.0.0' });
-      if (p) CFG.port = data.mcpPort = p;
-      if (b) CFG.bind = data.mcpBind = b;
-      if (typeof msg.allowWsl === 'boolean') CFG.allowWsl = data.mcpAllowWsl = msg.allowWsl;
-      if (typeof msg.confirmDestructive === 'boolean') CFG.confirmDestructive = data.mcpConfirm = msg.confirmDestructive;
-      if (typeof msg.showCursor === 'boolean') {
-        CFG.showCursor = data.mcpShowCursor = msg.showCursor;
-        if (!msg.showCursor) hideCursors();
-        if (msg.port === undefined && msg.bind === undefined && msg.allowWsl === undefined &&
-            msg.confirmDestructive === undefined) {
-          // Extension-only setting: no need to touch the helper.
-          return call(B.storage.local, 'set', data).then(statusSnapshot);
+      if (p) data.mcpPort = p;
+      if (b) data.mcpBind = b;
+      if (typeof msg.allowWsl === 'boolean') data.mcpAllowWsl = msg.allowWsl;
+      if (typeof msg.confirmDestructive === 'boolean') data.mcpConfirm = msg.confirmDestructive;
+      if (typeof msg.showCursor === 'boolean') data.mcpShowCursor = msg.showCursor;
+      return queued(async function () {
+        await call(B.storage.local, 'set', data);
+        if ('mcpPort' in data) CFG.port = data.mcpPort;
+        if ('mcpBind' in data) CFG.bind = data.mcpBind;
+        if ('mcpAllowWsl' in data) CFG.allowWsl = data.mcpAllowWsl;
+        if ('mcpConfirm' in data) CFG.confirmDestructive = data.mcpConfirm;
+        if ('mcpShowCursor' in data) {
+          CFG.showCursor = data.mcpShowCursor;
+          if (!CFG.showCursor) hideCursors();
         }
-      }
-      return call(B.storage.local, 'set', data).then(function () {
-        applyConfig();
-        return sleep(400).then(statusSnapshot);
+        // The cursor is extension-only: no need to touch the helper for it.
+        if (Object.keys(data).some(function (k) { return k !== 'mcpShowCursor'; })) {
+          applyConfig();
+          await sleep(400);
+        }
+        return statusSnapshot();
       });
     }
     if (type === 'regenerate-token') {
-      CFG.token = randomToken();
-      return call(B.storage.local, 'set', { mcpToken: CFG.token }).then(function () {
+      return queued(async function () {
+        var t = randomToken();
+        await call(B.storage.local, 'set', { mcpToken: t });
+        CFG.token = t;
         applyConfig();
-        return sleep(200).then(statusSnapshot);
+        await sleep(200);
+        return statusSnapshot();
       });
     }
+    if (type === 'set-paused') return setPaused(msg.paused === true);
     return undefined;
   });
 }

@@ -167,6 +167,46 @@ await run({ kind: "cancel", opId: "op1" });
 r = await Promise.race([waiting, page.waitForTimeout(3000).then(() => "still waiting")]);
 check("cancel stops act_wait in the page", r?.error?.code === "CANCELLED", JSON.stringify(r));
 
+await load(`<input id=q><button onclick="window.hit=1">Go</button>`);
+await run({ kind: "cancel", opId: "op2" });
+r = await run({ kind: "act-type", selector: "#q", text: "late", opId: "op2" });
+check("a command cancelled before it starts does nothing", r.error?.code === "CANCELLED" && (await ev("document.getElementById('q').value")) === "", JSON.stringify(r));
+
+// ---- explicit and ambiguous submit ----
+await load(`<div><textarea id=t></textarea><button onclick="window.a=1">Send</button><button onclick="window.b=1">Send now</button></div>`);
+s = await snap();
+r = await run({ kind: "act-type", selector: "#t", text: "hi", submit: true });
+check("two Send-like buttons: submit asks instead of guessing", r.submitted === false && /submitRef/.test(r.note) && !(await ev("window.a || window.b")), JSON.stringify(r));
+r = await run({ kind: "act-type", selector: "#t", text: "hi", submitRef: refOf(s, "button", "Send now"), generation: s.generation });
+check("submitRef clicks exactly that button", r.submitted === "button" && (await ev("window.b")) === 1 && !(await ev("window.a")), JSON.stringify(r));
+r = await run({ kind: "act-type", selector: "#t", text: "x", submitSelector: "#nope" });
+check("a bad submit target fails before typing", !!r.error && (await ev("document.getElementById('t').value")) === "hi", JSON.stringify(r));
+
+await load(`<form onsubmit="event.preventDefault(); window.n=1"><input id=e type=email required><button>Go</button></form>`);
+r = await run({ kind: "act-type", selector: "#e", text: "not-an-email", submit: true });
+check("an invalid form isn't submitted, and says why", r.submitted === false && /invalid/.test(r.note) && !(await ev("window.n")), JSON.stringify(r));
+
+// ---- unreachable elements ----
+await load(`<div inert><button onclick="window.hit=1">Behind</button><input id=i></div>`);
+r = await run({ kind: "act-click", selector: "button" });
+check("clicking an inert button fails", r.error?.code === "NOT_INTERACTABLE" && !(await ev("window.hit")), JSON.stringify(r));
+r = await run({ kind: "act-type", selector: "#i", text: "x" });
+check("typing into an inert field fails", r.error?.code === "NOT_INTERACTABLE", JSON.stringify(r));
+
+await load(`<button id=out onclick="window.hit=1">Outside</button><dialog id=d><button>Inside</button></dialog>`);
+await ev("document.getElementById('d').showModal()");
+r = await run({ kind: "act-click", selector: "#out" });
+check("clicking behind a modal dialog fails", r.error?.code === "NOT_INTERACTABLE" && !(await ev("window.hit")), JSON.stringify(r));
+
+await load(`<select id=s><optgroup label=Old disabled><option value=a>Alpha</option></optgroup><option value=b>Beta</option></select>`);
+r = await run({ kind: "act-select", selector: "#s", values: ["a"] });
+check("an option in a disabled optgroup can't be chosen", r.error?.code === "NO_MATCH" && (await ev("document.getElementById('s').value")) !== "a", JSON.stringify(r));
+
+// ---- find ----
+await load(`<p>cat cat</p><p hidden>cat</p><p style="display:none">cat</p><p>Cat</p>`);
+r = await run({ kind: "act-find", query: "cat" });
+check("find counts every visible match and skips hidden ones", r.count === 3 && r.matches.length === 3 && !r.truncated, JSON.stringify(r));
+
 await browser.close();
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

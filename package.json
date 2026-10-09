@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "webmcp-controller",
-  "version": "0.3.7",
+  "version": "0.3.9",
   "description": "Firefox MCP: WebExtension + native messaging host that serves MCP over HTTP to any harness",
   "type": "module",
   "workspaces": [

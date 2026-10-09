@@ -7,23 +7,29 @@ cd "$(dirname "$0")/.."
 OUT="webmcp-controller.zip"
 rm -f "$OUT"
 
-# Zip with paths RELATIVE to extension/ so AMO sees manifest.json at the root.
-if command -v zip >/dev/null 2>&1; then
-  (cd extension && zip -r "../$OUT" . -x README-INSTALL.md)
-else
-  python3 - "$OUT" <<'EOF'
+# Only what the add-on ships: never local files such as .amo-upload-uuid or README-INSTALL.md.
+# Paths are RELATIVE to extension/ so AMO sees manifest.json at the root.
+python3 - "$OUT" <<'EOF2'
 import os, sys, zipfile
 out = sys.argv[1]
+SHIP = ["manifest.json", "background.js", "common.js", "ui.css", "popup.html", "popup.js",
+        "options.html", "options.js", "content", "icons", "fonts", "cursors"]
+files = []
+for entry in SHIP:
+    full = os.path.join("extension", entry)
+    if os.path.isfile(full):
+        files.append(full)
+    elif os.path.isdir(full):
+        for dirpath, dirs, names in os.walk(full):
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            files += [os.path.join(dirpath, n) for n in sorted(names) if not n.startswith(".")]
+    elif entry in ("manifest.json", "background.js"):
+        sys.exit(f"missing extension/{entry}")
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-    for dirpath, _dirs, files in os.walk("extension"):
-        for f in files:
-            if f == "README-INSTALL.md":
-                continue
-            full = os.path.join(dirpath, f)
-            z.write(full, os.path.relpath(full, "extension"))
-print(f"wrote {out}")
-EOF
-fi
+    for f in files:
+        z.write(f, os.path.relpath(f, "extension"))
+print(f"wrote {out} ({len(files)} files)")
+EOF2
 
 echo "[webmcp] contents:"
 unzip -l "$OUT" 2>/dev/null || python3 -c "import zipfile,sys; print('\n'.join(zipfile.ZipFile(sys.argv[1]).namelist()))" "$OUT"

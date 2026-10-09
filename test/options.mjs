@@ -19,10 +19,11 @@ const READY = {
   version: "0.3.7", protocol: 1, compat: { state: "ok" }, platform: { os: "win", arch: "x86-64" }, hostMissing: false,
   connected: true, starting: false, listening: true, host: { version: "0.3.7", logFile: "C:\\Users\\me\\AppData\\Local\\webmcp-controller\\webmcp-host.log", url: "http://127.0.0.1:8901/mcp", extraUrls: [] },
   url: "http://127.0.0.1:8901/mcp", token: "a".repeat(64), port: 8901, bind: "127.0.0.1", allowWsl: false,
-  confirmDestructive: true, showCursor: true, defaults: { port: 8901, bind: "127.0.0.1" }, lastError: "", commands: 3,
+  confirmDestructive: true, showCursor: true, defaults: { port: 8901, bind: "127.0.0.1" }, lastError: "", commands: 3, connectedAt: Date.now() - 12 * 60000,
   events: [
     { at: Date.now() - 60000, text: "Helper stopped: <b>pipe</b>", level: "bad" },
     { at: Date.now() - 1000, text: "Listening on http://127.0.0.1:8901/mcp", level: "ok", count: 2 },
+    { at: Date.now(), text: "Clicked “Sign in”", level: "info", site: "github.com" },
   ],
 };
 
@@ -50,6 +51,7 @@ function fakeBackground(initial) {
       return snap();
     }
     if (m.type === "regenerate-token") { st.token = "b".repeat(64); return snap(); }
+    if (m.type === "set-paused") { st.paused = m.paused === true; return snap(); }
     return snap();
   } } };
 }
@@ -80,17 +82,37 @@ check("Retry is hidden when ready", !(await visible(page, "#retry")));
 const cmd = await text(page, "#cfg");
 check("Claude Code command replaces an existing entry", /^claude mcp remove --scope user firefox 2>\$null; claude mcp add --scope user /.test(cmd), cmd);
 check("command carries the token", cmd.includes("Bearer " + "a".repeat(64)));
-check("installed helper is tucked away", !(await visible(page, "#setupNow pre")) && (await page.locator("#install").evaluate((e) => e.style.order)) === "1");
-check("WSL option offered on Windows", await visible(page, "#whereRow") && (await text(page, "#localName")) === "Windows");
+check("installed helper is tucked away", !(await visible(page, "#install")) && !(await visible(page, "#setupLaterBody pre")));
+check("status facts filled in", (await text(page, "#factHelper")) === "v0.3.7" && (await text(page, "#factAddr")) === "127.0.0.1:8901" && /3 commands/.test(await text(page, "#factUp")));
+check("WSL option offered on Windows", await visible(page, "#whereRow"));
 check("WSL panel hidden for Windows-side AIs", !(await visible(page, "#wsl")));
-await page.locator("#activity summary").click();
 const evs = await page.locator("#events li").allTextContents();
-check("recent activity lists newest first", evs.length === 2 && /Listening.*×2/.test(evs[0]) && /Helper stopped/.test(evs[1]), JSON.stringify(evs));
+check("activity lists newest first, with site and count", evs.length === 3 && /Clicked “Sign in” · github\.com/.test(evs[0]) && /Listening.*×2/.test(evs[1]) && /Helper stopped/.test(evs[2]), JSON.stringify(evs));
 check("activity text isn't parsed as HTML", (await page.locator("#events b").count()) === 0);
+await page.locator("#helperDetails summary").click();
 check("helper log path shown", /webmcp-host\.log/.test(await text(page, "#logLine")) && (await visible(page, "#logLine")));
 
+// ---- pause ----
+check("Pause offered while ready", (await visible(page, "#pause")) && (await text(page, "#pause")) === "Pause AI");
+await page.locator("#pause").click();
+await page.waitForTimeout(200);
+check("Pause pauses", (await page.evaluate(() => window.__st.paused)) === true && (await text(page, "#stateTxt")) === "Paused" && (await text(page, "#pause")) === "Resume AI");
+await page.locator("#pause").click();
+await page.waitForTimeout(200);
+check("Resume resumes", (await page.evaluate(() => window.__st.paused)) === false && (await text(page, "#stateTxt")) === "Ready");
+
+// ---- Claude app ----
+await page.locator("label:has(input[name=kind][value=claude-app])").click();
+{
+  const c = JSON.parse(await text(page, "#cfg")).mcpServers.firefox;
+  check("Claude app goes through mcp-remote", c.command === "npx" && c.args.includes("mcp-remote") && c.args.includes("http://127.0.0.1:8901/mcp") &&
+    c.args.includes("Authorization:${AUTH}") && c.env.AUTH === "Bearer " + "a".repeat(64), JSON.stringify(c));
+  check("no WSL choice for the Claude app", !(await visible(page, "#whereRow")) && /claude_desktop_config\.json/.test(await text(page, "#kindHint")));
+}
+await page.locator("label:has(input[name=kind][value=claude])").click();
+
 // ---- WSL ----
-await page.locator("label:has(input[name=where][value=wsl])").click();
+await page.locator("#inWsl").check();
 await page.waitForTimeout(200);
 check("WSL command looks up the Windows address", /\$\(ip route show default/.test(await text(page, "#cfg")) && /2>\/dev\/null/.test(await text(page, "#cfg")));
 check("WSL switch shows next to the command", await visible(page, "#allowWsl"));
@@ -109,7 +131,7 @@ check("Codex gets TOML", /^\[mcp_servers\.firefox\]/m.test(cfgTxt) && cfgTxt.inc
 await page.locator("#allowWsl").uncheck();
 await page.waitForTimeout(200);
 check("WSL off is flagged", /^Off/.test(await text(page, "#wslState")));
-await page.locator("label:has(input[name=where][value=local])").click();
+await page.locator("#inWsl").uncheck();
 await page.locator("label:has(input[name=kind][value=gemini])").click();
 cfgTxt = await text(page, "#cfg");
 check("Gemini on Windows uses localhost", /^gemini mcp /.test(cfgTxt) && cfgTxt.includes("127.0.0.1:8901") && !(await visible(page, "#wsl")), cfgTxt);
@@ -123,6 +145,7 @@ await page.waitForTimeout(1700);
 check("a poll doesn't flip a saved switch back", !(await page.locator("#showCursor").isChecked()));
 
 // ---- port and bind ----
+await page.locator("#tokenDetails summary").click();
 check("Save is disabled until something changes", await page.locator("#save").isDisabled());
 await page.locator("#port").fill("9100");
 check("editing enables Save", await page.locator("#save").isEnabled());
@@ -164,7 +187,8 @@ await page.close();
 
 // ---- helper missing ----
 page = await open({ ...READY, platform: { os: "linux", arch: "x86-64" }, hostMissing: true, connected: false, listening: false, host: null, url: "" });
-check("missing helper puts install steps first", await page.locator("#install").evaluate((e) => e.classList.contains("attention") && e.style.order === "-1"));
+check("missing helper puts install steps first", (await visible(page, "#install")) && await page.locator("#install").evaluate((e) => e.classList.contains("attention") && getComputedStyle(e).order === "-1"));
+check("no Pause while the helper is missing", !(await visible(page, "#pause")));
 check("install command shown", /install\.sh \| sh/.test(await text(page, "#setupNow")) && /turns green/.test(await text(page, "#setupNow")));
 check("Retry offered", await visible(page, "#retry"));
 check("default harness is JSON", (await page.locator("input[value=json]").isChecked()) && /"mcpServers"/.test(await text(page, "#cfg")));

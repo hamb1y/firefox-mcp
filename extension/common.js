@@ -53,7 +53,7 @@ function renderSetup(container, platform, intro, installed) {
   row.className = 'row';
   var btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'primary';
+  btn.className = 'lime';
   btn.textContent = 'Copy command';
   btn.addEventListener('click', function () { copy(s.cmd, btn).catch(function () {}); });
   var dl = document.createElement('a');
@@ -85,7 +85,7 @@ function cliAdd(cli, url, auth, shell) {
     url + '" --header "Authorization: ' + auth + '"';
 }
 
-var HARNESSES = ['claude', 'codex', 'gemini', 'opencode', 'json'];
+var HARNESSES = ['claude', 'codex', 'gemini', 'opencode', 'claude-app', 'json'];
 var SHELL_HARNESSES = { claude: 'claude', gemini: 'gemini' };
 
 /* Where the AI runs: 'local' (this computer) or 'wsl' (Linux under WSL, Firefox on Windows). */
@@ -106,6 +106,7 @@ function urlFrom(st, where, inShell) {
 function mcpConfig(st, harness, where) {
   if (harness === 'wsl') { harness = 'claude'; where = 'wsl'; }
   if (HARNESSES.indexOf(harness) < 0) harness = 'json';
+  if (harness === 'claude-app') where = 'local'; // the Claude app runs on the computer itself
   var wsl = where === 'wsl' && canWsl(st);
   var auth = 'Bearer ' + ((st && st.token) || '');
   var cli = SHELL_HARNESSES[harness];
@@ -113,6 +114,12 @@ function mcpConfig(st, harness, where) {
   var url = urlFrom(st, where, false);
   if (harness === 'codex') {
     return '[mcp_servers.firefox]\nurl = ' + JSON.stringify(url) + '\nhttp_headers = { Authorization = ' + JSON.stringify(auth) + ' }';
+  }
+  if (harness === 'claude-app') {
+    // The Claude app only launches local servers, so mcp-remote bridges it to the HTTP endpoint.
+    return JSON.stringify({ mcpServers: { firefox: {
+      command: 'npx', args: ['-y', 'mcp-remote', url, '--header', 'Authorization:${AUTH}'], env: { AUTH: auth }
+    } } }, null, 2);
   }
   if (harness === 'opencode') {
     return JSON.stringify({ mcp: { firefox: { type: 'remote', url: url, headers: { Authorization: auth } } } }, null, 2);
@@ -122,6 +129,9 @@ function mcpConfig(st, harness, where) {
 
 /* What to do with the snippet. */
 function configHint(st, harness, where) {
+  if (harness === 'claude-app') {
+    return 'Add this to claude_desktop_config.json (Claude app → Settings → Developer → Edit Config), then restart the Claude app. Needs Node.js.';
+  }
   var wsl = where === 'wsl' && canWsl(st);
   var win = !!(st && st.platform && st.platform.os === 'win');
   var term = wsl ? 'your WSL terminal' : win ? 'PowerShell' : 'a terminal';
@@ -180,6 +190,7 @@ function setupNeed(st) {
 function summarize(st) {
   st = st || {};
   var c = (st.compat && st.compat.state) || '';
+  if (st.listening && st.paused) return { cls: 'paused', text: 'Paused' };
   if (st.listening) return { cls: 'on', text: c === 'helper-update' ? 'Ready · helper update available' : 'Ready' };
   if (st.hostMissing) return { cls: 'warn', text: 'Helper app not installed' };
   if (c === 'helper-old') return { cls: 'warn', text: 'Helper app needs an update' };

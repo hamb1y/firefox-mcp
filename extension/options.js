@@ -9,7 +9,7 @@ var $ = function (id) { return document.getElementById(id); };
 var tokenEl = $('token'), portEl = $('port'), bindEl = $('bind'), saveEl = $('save'), formErr = $('formErr');
 var cfgEl = $('cfg');
 var kindEls = Array.prototype.slice.call(document.querySelectorAll('input[name=kind]'));
-var whereEls = Array.prototype.slice.call(document.querySelectorAll('input[name=where]'));
+var inWslEl = $('inWsl');
 var toggles = { allowWsl: $('allowWsl'), showCursor: $('showCursor'), confirmDestructive: $('confirmDestructive') };
 var pending = {};      // toggles with a save in flight: don't let a poll flip them back
 var last = null;
@@ -32,28 +32,39 @@ function toast(text, isErr) {
 function errText(e) { return (e && e.message) || String(e); }
 
 /* ---- which AI, and where it runs ---- */
-function picked(els, fallback) {
-  var el = els.filter(function (x) { return x.checked; })[0];
-  return el ? el.value : fallback;
+function kind() {
+  var el = kindEls.filter(function (x) { return x.checked; })[0];
+  return el ? el.value : 'json';
 }
-function pick(els, value) {
-  els.forEach(function (x) { x.checked = x.value === value; });
+function pickKind(value) {
+  kindEls.forEach(function (x) { x.checked = x.value === value; });
 }
-function kind() { return picked(kindEls, 'json'); }
-function where() { return picked(whereEls, 'local'); }
+function where() { return inWslEl.checked ? 'wsl' : 'local'; }
+
+function since(ts) {
+  var m = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min';
+  var h = Math.floor(m / 60);
+  return h + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
+}
 
 /* ---- rendering ---- */
+var pausing = false;
 function renderStatus(st) {
   var sum = F.summarize(st);
   $('dot').className = 'dot ' + sum.cls;
   setText($('stateTxt'), sum.text);
   setText($('stateErr'), st.listening ? '' : ((st.host && st.host.error) || (st.hostMissing ? '' : st.lastError) || ''));
-  var bits = [];
-  if (st.listening) bits.push(F.mcpUrl(st), (st.commands || 0) + ' commands');
-  if (st.host && st.host.version) bits.push('helper v' + st.host.version);
-  bits.push('add-on v' + (st.version || '?'));
-  setText($('stateSub'), bits.join('  ·  '));
+  setText($('factHelper'), st.host && st.host.version ? 'v' + st.host.version : st.hostMissing ? 'Not installed' : '—');
+  setText($('factUp'), st.listening && st.connectedAt ? since(st.connectedAt) + ' · ' + (st.commands || 0) + ' commands' : '—');
+  setText($('factAddr'), st.listening ? F.mcpUrl(st).replace(/^http:\/\//, '').replace(/\/mcp$/, '') : '—');
+  setText($('addonVer'), 'Add-on v' + (st.version || '?') + ' · ');
   setHidden($('retry'), !!st.listening);
+  if (!pausing) {
+    setHidden($('pause'), !st.listening && !st.paused);
+    setText($('pause'), st.paused ? 'Resume AI' : 'Pause AI');
+  }
 }
 
 function renderInstall(st) {
@@ -61,12 +72,12 @@ function renderInstall(st) {
   var s = F.hostSetup(st.platform);
   var installed = st.host && st.host.version;
   setText($('installTitle'), need ? need.title : 'Helper app');
-  setText($('helperInfo'), (installed ? 'v' + st.host.version + ' installed · ' : '') + s.os);
+  setText($('helperInfo'), (installed ? 'v' + st.host.version + ' installed on ' : 'For ') + s.os +
+    (st.host && st.host.extraUrls && st.host.extraUrls.length ? ' · also on ' + st.host.extraUrls.join(', ') + ' for WSL' : ''));
   setText($('uninstallCmd'), s.uninstall);
-  // Missing or too old: steps up front, card first. Otherwise tucked away at the bottom.
-  var urgent = !!(need && !need.soft);
-  $('install').classList.toggle('attention', urgent);
-  $('install').style.order = urgent ? '-1' : '1';
+  // Missing or too old: steps up front. An optional update sits further down. Otherwise tucked away.
+  setHidden($('install'), !need);
+  $('install').classList.toggle('attention', !!(need && !need.soft));
   var key = JSON.stringify(st.platform) + '|' + (need ? need.title + need.intro : '');
   if (setupFor !== key) {
     setupFor = key;
@@ -86,11 +97,10 @@ function renderInstall(st) {
 var lastProbe = 0;
 
 function renderConnect(st) {
-  var win = F.canWsl(st);
+  var k = kind();
+  var win = F.canWsl(st) && k !== 'claude-app'; // the Claude app runs on Windows itself
   setHidden($('whereRow'), !win);
-  setText($('localName'), win ? 'Windows' : 'This computer');
-  if (!win && where() === 'wsl') pick(whereEls, 'local');
-  var k = kind(), w = where();
+  var w = win ? where() : 'local';
   setText($('kindHint'), F.configHint(st, k, w));
   setText(cfgEl, F.mcpConfig(st, k, w));
   setHidden($('wsl'), w !== 'wsl');
@@ -98,7 +108,7 @@ function renderConnect(st) {
   var ws = $('wslState');
   if (!st.allowWsl) {
     ws.className = 'warn';
-    setText(ws, 'Off — AIs in WSL can’t reach Firefox until you turn this on.');
+    setText(ws, 'Off: AIs in WSL can’t reach Firefox until you turn this on.');
   } else if (extra.length) {
     ws.className = 'ok';
     setText(ws, '✓ WSL can connect at ' + extra.join(', '));
@@ -135,8 +145,15 @@ function updateSave() {
 var eventsKey = '';
 function clock(ms) {
   var d = new Date(ms), now = new Date();
-  var t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  return d.toDateString() === now.toDateString() ? t : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + t;
+  return d.toDateString() === now.toDateString()
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+function span(cls, text) {
+  var el = document.createElement('span');
+  el.className = cls;
+  el.textContent = text;
+  return el;
 }
 function renderActivity(st) {
   var evs = st.events || [];
@@ -147,17 +164,18 @@ function renderActivity(st) {
     ul.textContent = '';
     if (!evs.length) {
       var li0 = document.createElement('li');
-      li0.textContent = 'Nothing yet.';
+      li0.appendChild(span('empty', 'Nothing yet.'));
       ul.appendChild(li0);
     }
     evs.slice().reverse().forEach(function (e) {
       var li = document.createElement('li');
       var tm = document.createElement('time');
       tm.dateTime = new Date(e.at).toISOString();
+      tm.title = new Date(e.at).toLocaleString();
       tm.textContent = clock(e.at);
-      var tx = document.createElement('span');
-      tx.className = e.level || '';
-      tx.textContent = e.text + (e.count > 1 ? ' (×' + e.count + ')' : '');
+      var tx = span(e.level === 'bad' ? 'bad' : '', e.text);
+      if (e.site) tx.appendChild(span('site', ' · ' + e.site));
+      if (e.count > 1) tx.appendChild(span('count', ' ×' + e.count));
       li.appendChild(tm);
       li.appendChild(tx);
       ul.appendChild(li);
@@ -173,6 +191,7 @@ function render(st) {
     $('dot').className = 'dot off';
     setText($('stateTxt'), 'The add-on didn’t answer');
     setText($('stateErr'), 'Reload this page. If it keeps happening, restart Firefox.');
+    setHidden($('retry'), false);
     return;
   }
   if (st.error) return;
@@ -195,6 +214,18 @@ function refresh() {
 /* ---- actions ---- */
 $('retry').addEventListener('click', function () { send({ type: 'reconnect' }).then(render).catch(function () {}); });
 
+$('pause').addEventListener('click', function () {
+  if (!last || pausing) return;
+  pausing = true;
+  send({ type: 'set-paused', paused: !last.paused }).then(function (st) {
+    pausing = false;
+    render(st);
+  }).catch(function (e) {
+    pausing = false;
+    toast('Couldn’t pause: ' + errText(e), true);
+  });
+});
+
 function copyFrom(text, btn) {
   F.copy(text, btn).catch(function (e) { toast(errText(e), true); });
 }
@@ -207,24 +238,22 @@ $('reveal').addEventListener('click', function () {
   this.textContent = show ? 'Hide' : 'Show';
 });
 
-pick(kindEls, F.configKind());
-pick(whereEls, F.configWhere());
+pickKind(F.configKind());
+inWslEl.checked = F.configWhere() === 'wsl';
 kindEls.forEach(function (el) {
   el.addEventListener('change', function () {
     F.configKind(el.value);
     if (last) renderConnect(last);
   });
 });
-whereEls.forEach(function (el) {
-  el.addEventListener('change', function () {
-    F.configWhere(el.value);
-    if (last) renderConnect(last);
-    // Picking WSL means you want WSL to connect: switch it on rather than leave a dead config.
-    if (el.value === 'wsl' && last && !last.allowWsl) {
-      toggles.allowWsl.checked = true;
-      toggles.allowWsl.dispatchEvent(new Event('change'));
-    }
-  });
+inWslEl.addEventListener('change', function () {
+  F.configWhere(where());
+  if (last) renderConnect(last);
+  // Saying the AI is in WSL means you want WSL to connect: switch it on rather than leave a dead config.
+  if (inWslEl.checked && last && !last.allowWsl) {
+    toggles.allowWsl.checked = true;
+    toggles.allowWsl.dispatchEvent(new Event('change'));
+  }
 });
 
 /* Toggles apply right away. */

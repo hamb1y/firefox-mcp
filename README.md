@@ -11,6 +11,10 @@ While the model works, a glowing **AI cursor** glides to whatever it is
 clicking or typing into, with a small bubble saying what it is doing
 (toggle it in the popup).
 
+**Pause AI** (popup button, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>.</kbd>)
+stops every command until you resume; the AI is told it's paused. The toolbar
+badge shows `II` while paused and a lime dot while the AI is working.
+
 **Install:** add the add-on, paste one command (below) to install the helper,
 click **Copy MCP config** in the add-on popup, paste that into your harness.
 
@@ -149,7 +153,9 @@ bubble beside an animated cursor on the page being driven:
   blocks real input or leaks into `page_html` / `snapshot_ax`, and it is
   hidden while `screenshot` captures.
 - It fades after 8s idle. Toggle: popup → **Show AI cursor**, or Settings →
-  **AI cursor**. On by default.
+  **Show the AI cursor**. On by default.
+- Cursor shapes are [Bibata](https://github.com/ful1e5/Bibata_Cursor) by
+  ful1e5 (GPL-3.0).
 
 The server's MCP `instructions` tell models to pass `thought`, so most
 harnesses do it without prompting.
