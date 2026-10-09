@@ -44,12 +44,14 @@ const urlFor = (host: string, port: number): string =>
 const LOOPBACK_NAMES = new Set(["127.0.0.1", "localhost", "::1"]);
 const isLoopbackBind = (bind: string): boolean => LOOPBACK_NAMES.has(bind) || bind.startsWith("127.");
 
-/** Hostname part of a Host header value ("[::1]:8901" -> "::1"). */
-function hostName(value: string): string {
+/**
+ * Hostname part of a Host header value ("[::1]:8901" -> "::1"), or "" if it isn't a
+ * well-formed host[:port] (e.g. "[::1]evil.example", "user@host", spaces).
+ */
+export function hostName(value: string): string {
   const v = value.trim().toLowerCase();
-  if (v.startsWith("[")) return v.slice(1, v.indexOf("]") > 0 ? v.indexOf("]") : undefined);
-  const i = v.lastIndexOf(":");
-  return i > 0 && v.indexOf(":") === i ? v.slice(0, i) : v;
+  const m = /^\[([0-9a-f:.]+)\](?::\d{1,5})?$/.exec(v) ?? /^([a-z0-9._-]+)(?::\d{1,5})?$/.exec(v);
+  return m ? m[1]! : "";
 }
 
 const isWildcard = (bind: string): boolean => bind === "0.0.0.0" || bind === "::";
@@ -298,8 +300,8 @@ export class McpHttp {
 
   /** Is `host` (from a Host header) a name this server can legitimately be reached by? */
   private hostAllowed(host: string): boolean {
-    const bind = this.active?.bind ?? this.config?.bind ?? "127.0.0.1";
-    if (LOOPBACK_NAMES.has(host)) return true;
+    const bind = (this.active?.bind ?? this.config?.bind ?? "127.0.0.1").toLowerCase();
+    if (LOOPBACK_NAMES.has(host) || host === bind) return true;
     if (this.config?.allowWsl && this.findWsl().includes(host)) return true;
     if (isLoopbackBind(bind)) return false; // DNS rebinding: evil.example -> 127.0.0.1
     const me = os.hostname().toLowerCase();
@@ -310,13 +312,15 @@ export class McpHttp {
   private originAllowed(origin: string): boolean {
     let h: string;
     try {
-      h = new URL(origin).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      const u = new URL(origin);
+      if ((u.protocol !== "http:" && u.protocol !== "https:") || u.username || u.password) return false;
+      h = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     } catch {
       return false;
     }
     if (LOOPBACK_NAMES.has(h)) return true;
-    const bind = this.active?.bind ?? "";
-    return (!isLoopbackBind(bind) && h === bind) || this.findWsl().includes(h);
+    const bind = (this.active?.bind ?? "").toLowerCase();
+    return (!isWildcard(bind) && h === bind) || this.findWsl().includes(h);
   }
 
   private buildApp(): express.Express {
@@ -370,9 +374,12 @@ export class McpHttp {
       this.state.requests += 1;
       // notifications/cancelled: abort the matching in-flight request, if unambiguous.
       for (const m of Array.isArray(body) ? body : [body]) {
-        const msg = m as { method?: unknown; params?: { requestId?: unknown } } | null;
-        if (msg?.method !== "notifications/cancelled") continue;
-        const rid = msg.params?.requestId;
+        const msg = m as { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown } | null;
+        // Only a well-formed JSON-RPC notification counts; anything else is left to the SDK to reject.
+        if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || "id" in msg) continue;
+        if (msg.method !== "notifications/cancelled") continue;
+        if (!msg.params || typeof msg.params !== "object") continue;
+        const rid = (msg.params as { requestId?: unknown }).requestId;
         const set = typeof rid === "string" || typeof rid === "number" ? this.inflight.get(rid) : undefined;
         if (set?.size === 1) for (const c of set) c.abort();
       }

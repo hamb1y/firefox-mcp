@@ -207,6 +207,44 @@ await load(`<p>cat cat</p><p hidden>cat</p><p style="display:none">cat</p><p>Cat
 r = await run({ kind: "act-find", query: "cat" });
 check("find counts every visible match and skips hidden ones", r.count === 3 && r.matches.length === 3 && !r.truncated, JSON.stringify(r));
 
+// ---- shadow roots ----
+await load(`<div id=h></div><span id=lab>Outer label</span>`);
+await ev(`(() => { const r = document.getElementById('h').attachShadow({ mode: 'open' });
+  r.innerHTML = '<span id=lab>Inner label</span><input aria-labelledby=lab><p>shadow needle</p>'; })()`);
+s = await snap();
+check("aria-labelledby resolves inside the element's shadow root", !!refOf(s, "textbox", "Inner label"), JSON.stringify(s.nodes));
+r = await run({ kind: "act-find", query: "needle" });
+check("find sees text in open shadow roots", r.count === 1, JSON.stringify(r));
+await load(`<input id=a><div id=h></div><input id=c>`);
+await ev(`(() => { const r = document.getElementById('h').attachShadow({ mode: 'open' }); r.innerHTML = '<input id=b>'; document.getElementById('a').focus(); })()`);
+await run({ kind: "act-key", key: "Tab" });
+check("Tab moves into an open shadow root in order", await ev("document.activeElement.id === 'h' && document.getElementById('h').shadowRoot.activeElement.id === 'b'"));
+
+// ---- caret, selection, graphemes ----
+await load(`<input id=i value="abcd">`);
+await ev("(() => { const i = document.getElementById('i'); i.focus(); i.setSelectionRange(1, 1); })()");
+await run({ kind: "act-key", key: "ArrowRight", modifiers: ["Shift"] });
+check("Shift+ArrowRight extends the selection", await ev("[i.selectionStart, i.selectionEnd].join()") === "1,2");
+await ev("i.setSelectionRange(1, 3)");
+await run({ kind: "act-key", key: "ArrowRight" });
+check("ArrowRight collapses a selection to its end", await ev("[i.selectionStart, i.selectionEnd].join()") === "3,3");
+await run({ kind: "act-key", key: "Home", modifiers: ["Shift"] });
+check("Shift+Home selects back to the start", await ev("[i.selectionStart, i.selectionEnd, i.selectionDirection].join()") === "0,3,backward");
+await load(`<input id=i value="a😀">`);
+await ev("(() => { const i = document.getElementById('i'); i.focus(); i.setSelectionRange(3, 3); })()");
+await run({ kind: "act-key", key: "Backspace" });
+check("Backspace deletes a whole emoji", await ev("i.value") === "a", JSON.stringify(await ev("i.value")));
+await load(`<input id=i value="👍🏽x">`);
+await ev("(() => { const i = document.getElementById('i'); i.focus(); i.setSelectionRange(0, 0); })()");
+await run({ kind: "act-key", key: "Delete" });
+check("Delete removes a whole grapheme cluster", await ev("i.value") === "x", JSON.stringify(await ev("i.value")));
+
+// ---- cursor feedback ----
+await load(`<button>Go</button>`);
+await ev(`window.__said = []; window.__clicks = 0; window.__fxmcpCursor = { moveTo: async (el, n) => { window.__said.push(n); }, say: (n) => window.__said.push(n), click: () => window.__clicks++ };`);
+r = await run({ kind: "act-click", selector: "#missing", cursor: {} });
+check("a failed click shows failure, not a click", !!r.error && (await ev("window.__clicks")) === 0 && (await ev("window.__said.at(-1)")) === "That didn’t work", JSON.stringify(await ev("window.__said")));
+
 await browser.close();
 console.log(failures ? `\n${failures} failed` : "\nall passed");
 process.exit(failures ? 1 : 0);

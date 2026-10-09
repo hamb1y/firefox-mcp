@@ -41,6 +41,9 @@ const LEGACY_HOST_NAME = "firefox_mcp_bridge";
 
 // ===================================================================== host
 
+/** Largest extension -> helper message we'll buffer (screenshots of huge pages are well under this). */
+const MAX_FRAME_BYTES = 64 * 1024 * 1024;
+
 /** Max log size before it's rotated to webmcp-host.log.1. */
 const LOG_MAX_BYTES = 512 * 1024;
 
@@ -50,12 +53,16 @@ const LOG_MAX_BYTES = 512 * 1024;
  */
 function startLog(): string {
   let file = "";
+  let size = 0;
   try {
     const dir = installDir();
     fs.mkdirSync(dir, { recursive: true });
     file = path.join(dir, "webmcp-host.log");
-    const size = fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
-    if (size > LOG_MAX_BYTES) fs.renameSync(file, `${file}.1`);
+    size = fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+    if (size > LOG_MAX_BYTES) {
+      fs.renameSync(file, `${file}.1`);
+      size = 0;
+    }
     fs.appendFileSync(file, "");
   } catch {
     return "";
@@ -67,7 +74,18 @@ function startLog(): string {
     if (broken) return;
     try {
       const line = args.map((a) => (typeof a === "string" ? a : a instanceof Error ? a.stack : String(a))).join(" ");
-      fs.appendFileSync(file, `${new Date().toISOString()} [${process.pid}] ${line}\n`);
+      const text = `${new Date().toISOString()} [${process.pid}] ${line}\n`;
+      // A helper can run for weeks: rotate while running too, not just at start.
+      if (size + text.length > LOG_MAX_BYTES) {
+        try {
+          fs.renameSync(file, `${file}.1`);
+        } catch {
+          /* another helper rotated it first */
+        }
+        size = 0;
+      }
+      fs.appendFileSync(file, text);
+      size += Buffer.byteLength(text);
     } catch {
       broken = true; // disk full, folder deleted: keep running, just stop logging
     }
@@ -170,10 +188,25 @@ function runHost(): void {
 
   // Native messaging framing: uint32 (native endian = LE everywhere we ship) + UTF-8 JSON.
   let buf: Buffer = Buffer.alloc(0);
+  /** Bytes still to drop from a frame that was too big to buffer. */
+  let skip = 0;
   process.stdin.on("data", (chunk: Buffer) => {
+    if (skip) {
+      const n = Math.min(skip, chunk.length);
+      skip -= n;
+      chunk = chunk.subarray(n);
+      if (!chunk.length) return;
+    }
     buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
     while (buf.length >= 4) {
       const len = buf.readUInt32LE(0);
+      if (len > MAX_FRAME_BYTES) {
+        console.error(`[webmcp] dropping a ${len}-byte message from the extension (limit ${MAX_FRAME_BYTES})`);
+        const have = Math.min(buf.length - 4, len);
+        skip = len - have;
+        buf = buf.subarray(4 + have);
+        continue;
+      }
       if (buf.length < 4 + len) break;
       const body = buf.subarray(4, 4 + len).toString("utf8");
       buf = buf.subarray(4 + len);
@@ -184,7 +217,12 @@ function runHost(): void {
         console.error("[webmcp] ignoring non-JSON message from extension");
         continue;
       }
-      onMessage(msg);
+      // One bad message must not take the rest of the stream down with it.
+      try {
+        onMessage(msg);
+      } catch (e) {
+        console.error(`[webmcp] failed to handle a message from the extension: ${String(e)}`);
+      }
     }
   });
 
@@ -319,7 +357,9 @@ function isCompiled(): boolean {
  */
 function copySelf(dest: string): void {
   const src = process.execPath;
-  if (path.resolve(src).toLowerCase() === path.resolve(dest).toLowerCase()) return;
+  // Windows and macOS file systems ignore case by default; Linux's don't.
+  const fold = (f: string): string => (platform() === "linux" ? path.resolve(f) : path.resolve(f).toLowerCase());
+  if (fold(src) === fold(dest)) return;
   const tmp = `${dest}.new-${process.pid}`;
   fs.copyFileSync(src, tmp);
   if (platform() !== "win") fs.chmodSync(tmp, 0o755);
@@ -331,8 +371,20 @@ function copySelf(dest: string): void {
       fs.rmSync(tmp, { force: true });
       throw e;
     }
-    fs.renameSync(dest, `${dest}.old-${Date.now()}`);
-    fs.renameSync(tmp, dest);
+    const old = `${dest}.old-${Date.now()}`;
+    fs.renameSync(dest, old);
+    try {
+      fs.renameSync(tmp, dest);
+    } catch (e2) {
+      // Put the working helper back rather than leave none at all.
+      try {
+        fs.renameSync(old, dest);
+      } catch {
+        /* nothing more we can do; the error below says what failed */
+      }
+      fs.rmSync(tmp, { force: true });
+      throw e2;
+    }
   }
 }
 
@@ -360,11 +412,14 @@ function installExecutable(dir: string): string {
   const script = path.resolve(process.argv[1] ?? "");
   if (win) {
     const dest = path.join(dir, "webmcp-host.bat");
-    fs.writeFileSync(dest, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    // Paths can't contain quotes on Windows, but a literal % must be doubled in a .bat.
+    const bat = (f: string): string => `"${f.replace(/%/g, "%%")}"`;
+    fs.writeFileSync(dest, `@echo off\r\n${bat(process.execPath)} ${bat(script)} %*\r\n`);
     return dest;
   }
   const dest = path.join(dir, "webmcp-host.sh");
-  fs.writeFileSync(dest, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+  const sh = (f: string): string => `'${f.replace(/'/g, "'\\''")}'`; // no $, ` or \ expansion inside '…'
+  fs.writeFileSync(dest, `#!/bin/sh\nexec ${sh(process.execPath)} ${sh(script)} "$@"\n`);
   fs.chmodSync(dest, 0o755);
   return dest;
 }

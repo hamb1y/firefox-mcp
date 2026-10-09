@@ -181,7 +181,9 @@ function computeName(el, tag) {
   if (labelledby) {
     var parts = [];
     labelledby.trim().split(/\s+/).forEach(function (id) {
-      var lab = document.getElementById(id);
+      // ids resolve within the element's own (shadow) tree
+      var scope = el.getRootNode ? el.getRootNode() : document;
+      var lab = (scope && scope.getElementById ? scope : document).getElementById(id);
       if (lab) parts.push(textOf(lab));
     });
     if (parts.length) return parts.join(' ').slice(0, 100);
@@ -1086,9 +1088,22 @@ function canEdit(el) {
   return el.isConnected && !isDisabled(el) && !el.readOnly && !isInert(el) && deepActive() === el;
 }
 
+/* Elements matching sel in document order, descending into open shadow roots
+ * where their hosts sit. */
+function deepQueryAll(root, sel, out) {
+  out = out || [];
+  var all = root.querySelectorAll('*');
+  for (var i = 0; i < all.length; i++) {
+    var e = all[i];
+    if (e.matches(sel)) out.push(e);
+    if (e.shadowRoot) deepQueryAll(e.shadowRoot, sel, out);
+  }
+  return out;
+}
+
 /* Focusable elements in tab order (positive tabindex first, then DOM order). */
 function tabOrder() {
-  var all = document.querySelectorAll('a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable=""], [contenteditable="true"]');
+  var all = deepQueryAll(document, 'a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable=""], [contenteditable="true"]');
   var pos = [], zero = [];
   for (var i = 0; i < all.length; i++) {
     var e = all[i];
@@ -1118,6 +1133,57 @@ function insertText(el, s) {
   return true;
 }
 
+/* Character boundaries (grapheme clusters where supported, else code points),
+   so keys never split an emoji or a letter with its accent. */
+var graphemes = null;
+try { graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' }); } catch (e) {}
+function boundaries(v) {
+  var out = [0];
+  if (graphemes) {
+    for (var it = graphemes.segment(v)[Symbol.iterator](), r = it.next(); !r.done; r = it.next()) {
+      out.push(r.value.index + r.value.segment.length);
+    }
+  } else {
+    for (var i = 0; i < v.length;) {
+      i += (/[\uD800-\uDBFF]/.test(v[i]) && /[\uDC00-\uDFFF]/.test(v[i + 1] || '')) ? 2 : 1;
+      out.push(i);
+    }
+  }
+  return out;
+}
+function prevBoundary(v, i) {
+  var b = boundaries(v), p = 0;
+  for (var k = 0; k < b.length && b[k] < i; k++) p = b[k];
+  return p;
+}
+function nextBoundary(v, i) {
+  var b = boundaries(v);
+  for (var k = 0; k < b.length; k++) if (b[k] > i) return b[k];
+  return v.length;
+}
+
+/* Move the caret like the arrow/Home/End keys do: collapse a selection to its
+   edge, or with Shift move only the selection's focus end. */
+function moveCaret(el, key, shift) {
+  var v = String(el.value), st = el.selectionStart, en = el.selectionEnd;
+  var back = el.selectionDirection === 'backward';
+  var anchor = back ? en : st, focus = back ? st : en;
+  var to;
+  if (key === 'ArrowLeft' || key === 'ArrowRight') {
+    var right = key === 'ArrowRight';
+    if (!shift && st !== en) to = right ? en : st;
+    else to = right ? nextBoundary(v, focus) : prevBoundary(v, focus);
+  } else {
+    var multi = el.tagName === 'TEXTAREA';
+    to = key === 'Home' ? (multi && focus > 0 ? v.lastIndexOf('\n', focus - 1) + 1 : 0)
+      : (multi && v.indexOf('\n', focus) >= 0 ? v.indexOf('\n', focus) : v.length);
+  }
+  if (!shift) { el.setSelectionRange(to, to); return 'moved the caret'; }
+  if (to < anchor) el.setSelectionRange(to, anchor, 'backward');
+  else el.setSelectionRange(anchor, to, 'forward');
+  return 'extended the selection';
+}
+
 function deleteText(el, forward) {
   if (el.isContentEditable) {
     try { return document.execCommand(forward ? 'forwardDelete' : 'delete', false); } catch (e) { return false; }
@@ -1126,7 +1192,7 @@ function deleteText(el, forward) {
   if (st === null || st === undefined) return false;
   var v = String(el.value);
   if (st === en) {
-    if (forward) en = Math.min(v.length, en + 1); else st = Math.max(0, st - 1);
+    if (forward) en = nextBoundary(v, en); else st = prevBoundary(v, st);
   }
   if (st === en) return false;
   nativeSetValue(el, v.slice(0, st) + v.slice(en));
@@ -1205,11 +1271,7 @@ async function keyDefault(key, mods, el, msg) {
       return 'scrolled the page';
     case 'ArrowLeft': case 'ArrowRight':
       if (text) {
-        if (typeof el.setSelectionRange === 'function' && el.selectionStart !== null) {
-          var p = Math.max(0, Math.min(String(el.value).length, el.selectionStart + (key === 'ArrowRight' ? 1 : -1)));
-          el.setSelectionRange(p, p);
-          return 'moved the caret';
-        }
+        if (typeof el.setSelectionRange === 'function' && el.selectionStart !== null) return moveCaret(el, key, mods.shiftKey);
         return '';
       }
       scrollBy(key === 'ArrowRight' ? 40 : -40, 0);
@@ -1220,11 +1282,7 @@ async function keyDefault(key, mods, el, msg) {
       return 'scrolled the page';
     case 'Home': case 'End':
       if (text) {
-        if (typeof el.setSelectionRange === 'function' && el.selectionStart !== null) {
-          var q = key === 'Home' ? 0 : String(el.value).length;
-          el.setSelectionRange(q, q);
-          return 'moved the caret';
-        }
+        if (typeof el.setSelectionRange === 'function' && el.selectionStart !== null) return moveCaret(el, key, mods.shiftKey);
         return '';
       }
       doScroll({ to: key === 'Home' ? 'top' : 'bottom' });
@@ -1316,26 +1374,33 @@ function doFind(msg) {
   var matches = [], count = 0;
   var shown = new Map(); // parent element -> visible?
   if (!root) return { matches: matches, count: 0, truncated: false };
-  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-  for (var n = walker.nextNode(); n; n = walker.nextNode()) {
-    var parent = n.parentElement;
-    if (!parent || SKIP_TAGS[parent.tagName]) continue;
-    var val = n.nodeValue || '';
-    var low = val.toLowerCase();
-    var idx = low.indexOf(q);
-    if (idx < 0) continue;
-    var vis = shown.get(parent);
-    if (vis === undefined) { vis = visible(parent); shown.set(parent, vis); }
-    if (!vis) continue;
-    for (; idx >= 0; idx = low.indexOf(q, idx + q.length)) {
-      count++;
-      if (matches.length >= 20) continue;
-      var m = { snippet: val.slice(Math.max(0, idx - 30), idx + q.length + 30).replace(/\s+/g, ' ').trim() };
-      var r = elToRef.get(parent);
-      if (r !== undefined) m.ref = r;
-      matches.push(m);
+  // Text nodes in document order, including open shadow roots.
+  (function walk(r) {
+    var walker = document.createTreeWalker(r, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, null);
+    for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (n.nodeType === 1) {
+        if (n.shadowRoot) walk(n.shadowRoot);
+        continue;
+      }
+      var parent = n.parentElement;
+      if (!parent || SKIP_TAGS[parent.tagName]) continue;
+      var val = n.nodeValue || '';
+      var low = val.toLowerCase();
+      var idx = low.indexOf(q);
+      if (idx < 0) continue;
+      var vis = shown.get(parent);
+      if (vis === undefined) { vis = visible(parent); shown.set(parent, vis); }
+      if (!vis) continue;
+      for (; idx >= 0; idx = low.indexOf(q, idx + q.length)) {
+        count++;
+        if (matches.length >= 20) continue;
+        var m = { snippet: val.slice(Math.max(0, idx - 30), idx + q.length + 30).replace(/\s+/g, ' ').trim() };
+        var ref = elToRef.get(parent);
+        if (ref !== undefined) m.ref = ref;
+        matches.push(m);
+      }
     }
-  }
+  })(root);
   return { matches: matches, count: count, truncated: count > matches.length };
 }
 
@@ -1424,9 +1489,14 @@ async function cursorBefore(msg) {
   }
 }
 
-function cursorAfter(msg, result) {
+function cursorAfter(msg, result, err) {
   var C = window.__fxmcpCursor;
-  if (msg.cursor && C && msg.kind === 'act-click' && result && result.clicked) C.click();
+  if (!msg.cursor || !C) return;
+  try {
+    // Don't leave "Clicking …" up when nothing was clicked.
+    if (err) C.say(err.code === 'CANCELLED' ? 'Stopped' : 'That didn’t work', 'arrow');
+    else if (msg.kind === 'act-click' && result && result.clicked) C.click();
+  } catch (e) {} // the overlay must never fail an action
 }
 
 function cursorCommand(msg) {
@@ -1455,13 +1525,14 @@ async function handleMessage(msg) {
   }
   checkCancel(msg);
   if (msg.cursor) await cursorBefore(msg);
-  checkCancel(msg); // the glide takes a moment
-  var result = null;
   try {
-    result = await dispatch(msg);
+    checkCancel(msg); // the glide takes a moment
+    var result = await dispatch(msg);
+    if (msg.cursor) cursorAfter(msg, result, null);
     return result;
-  } finally {
-    if (msg.cursor) cursorAfter(msg, result);
+  } catch (e) {
+    if (msg.cursor) cursorAfter(msg, null, e);
+    throw e;
   }
 }
 

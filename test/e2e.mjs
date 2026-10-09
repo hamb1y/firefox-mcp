@@ -56,6 +56,7 @@ const COOKIES = [
   { name: "chips-here", value: "2", domain: "cdn.test", partitionKey: { topLevelSite: "https://example.com" } },
   { name: "chips-elsewhere", value: "3", domain: "cdn.test", partitionKey: { topLevelSite: "https://other.test" } },
 ];
+const extraTabs = [];
 const onMsg = ev();
 let pageGone = null; // (msg) => true makes the page vanish under that message, like a navigation
 const browser = {
@@ -65,7 +66,8 @@ const browser = {
   },
   storage: { local: { get: async (k) => Object.fromEntries(k.filter((x) => x in store).map((x) => [x, store[x]])), set: async (o) => Object.assign(store, o) } },
   tabs: {
-    query: async () => [TAB], get: async () => TAB,
+    query: async () => [TAB, ...extraTabs], get: async () => TAB,
+    update: async (id, props) => Object.assign(TAB, props),
     sendMessage: async (tabId, msg) => {
       sent.push(JSON.parse(JSON.stringify(msg)));
       if (pageGone?.(msg)) throw new Error("Message manager disconnected");
@@ -131,6 +133,20 @@ check("meta tools have no thought", !tools.find((t) => t.name === "extension_sta
 
 let r = await tool("tabs_list");
 check("tabs_list", r.status === 200 && /example\.com/.test(text(r)));
+extraTabs.push({ id: 8, windowId: 1, index: 1, url: "https://asleep.test/", title: "Asleep", discarded: true, status: "complete" });
+r = await tool("tabs_list", { includeDiscarded: false });
+check("tabs_list includeDiscarded:false leaves discarded tabs out", !/asleep/.test(text(r)) && /example\.com/.test(text(r)), text(r));
+r = await tool("tabs_list");
+check("tabs_list includes discarded tabs by default", /asleep/.test(text(r)), text(r));
+extraTabs.length = 0;
+r = await tool("tabs_query", { urlPattern: "(a+)+$" });
+check("tabs_query refuses a catastrophic regex", /INVALID_PARAMS/.test(text(r)) && /nested/.test(text(r)), text(r));
+r = await tool("tabs_query", { urlPattern: "^https://(?:www\\.)?example\\.com/" });
+check("tabs_query still takes ordinary regexes", /example\.com/.test(text(r)), text(r));
+let t0 = Date.now();
+r = await tool("tab_navigate", { url: "https://example.com/#pricing", timeoutMs: 5000 });
+check("a #fragment navigation doesn't wait for a load that never comes", /"loadComplete": true/.test(text(r)) && Date.now() - t0 < 2000, `${Date.now() - t0}ms ${text(r)}`);
+TAB.url = "https://example.com/";
 
 sent.length = 0;
 await tool("act_click", { ref: 3, thought: "Opening the pricing page" });

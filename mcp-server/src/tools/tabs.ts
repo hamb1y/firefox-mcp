@@ -54,7 +54,7 @@ export function registerTabTools(
     {
       description: "List all open tabs (id, url, title, active/pinned/audible state).",
       inputSchema: {
-        includeDiscarded: z.boolean().optional().describe("Include discarded (unloaded) tabs"),
+        includeDiscarded: z.boolean().optional().describe("Include discarded (unloaded) tabs (default true; false leaves them out)"),
       },
     },
     async (args) =>
@@ -66,8 +66,11 @@ export function registerTabTools(
     {
       description: "Find tabs by URL/title pattern and state flags.",
       inputSchema: {
-        urlPattern: z.string().optional().describe("Substring or regex matched against tab URLs"),
-        titlePattern: z.string().optional().describe("Substring or regex matched against tab titles"),
+        urlPattern: z
+          .string()
+          .optional()
+          .describe("Substring or regex matched against tab URLs (no backreferences or nested quantifiers like (a+)+)"),
+        titlePattern: z.string().optional().describe("Substring or regex matched against tab titles (same rules)"),
         audible: z.boolean().optional().describe("Only tabs currently producing sound"),
         pinned: z.boolean().optional().describe("Only pinned (or only unpinned) tabs"),
         active: z.boolean().optional().describe("Only the active tab(s)"),

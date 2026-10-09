@@ -307,9 +307,19 @@ async function actOn(tabId, p, ctx, msg) {
   }
 }
 
-async function shoot(tab, p) {
+/* One screenshot at a time: two that each switch tabs would otherwise hand
+ * focus back in the wrong order. */
+var shootChain = Promise.resolve();
+function shoot(tab, p) {
+  var run = shootChain.then(function () { return shootNow(tab, p); });
+  shootChain = run.catch(function () {});
+  return run;
+}
+
+async function shootNow(tab, p) {
   var format = p.format === 'jpeg' ? 'jpeg' : 'png';
   var opts = format === 'jpeg' ? { format: format, quality: 80 } : { format: format };
+  try { tab = await call(B.tabs, 'get', tab.id); } catch (e) {} // may have changed while queued
   // Fast path (Firefox 125+): capture a background tab without switching to it.
   if (!tab.active && B.tabs && typeof B.tabs.captureTab === 'function') {
     try {
@@ -327,9 +337,13 @@ async function shoot(tab, p) {
     var dataUrl = await call(B.tabs, 'captureVisibleTab', tab.windowId, opts);
     return { image: dataUrl, format: format, tabId: tab.id };
   } finally {
-    // Hand the user's tab back so screenshots don't hijack what they're looking at.
+    // Hand the user's tab back so screenshots don't hijack what they're looking at,
+    // unless they've switched tabs themselves meanwhile.
     if (restoreId !== null && !p.keepActive) {
-      try { await call(B.tabs, 'update', restoreId, { active: true }); } catch (e) {}
+      try {
+        var now = await call(B.tabs, 'query', { active: true, windowId: tab.windowId });
+        if (now && now[0] && now[0].id === tab.id) await call(B.tabs, 'update', restoreId, { active: true });
+      } catch (e) {}
     }
   }
 }
@@ -416,28 +430,73 @@ function tabLoadWaiter(timeoutMs, signal, wantUrl) {
   };
 }
 
+/* Same page apart from the #fragment, which navigates without loading. */
+function sameDocument(from, to) {
+  var a = String(from || ''), b = String(to || '');
+  if (b.indexOf('#') < 0) return false;
+  try { b = new URL(b, a).href; } catch (e) { return false; }
+  return a.split('#')[0] === b.split('#')[0] && a !== b;
+}
+
+/* tab.update with active:true also brings its window forward. */
+async function focusWindow(props, tab) {
+  if (!props.active || !tab) return;
+  try { await call(B.windows, 'update', tab.windowId, { focused: true }); } catch (e) {}
+}
+
+/* A user regex that can't backtrack catastrophically: JS regexes can't be
+ * timed out, and a hung match would freeze the whole add-on. Rejects
+ * backreferences and a quantified group with a quantifier inside, e.g. (a+)+. */
+function safeRegExp(src) {
+  if (src === undefined || src === null || src === '') return null;
+  src = String(src);
+  if (src.length > 500) throw new Error('pattern longer than 500 characters');
+  var stack = [], inClass = false, prevQuant = false;
+  for (var i = 0; i < src.length; i++) {
+    var c = src[i];
+    if (c === '\\') {
+      if (/[1-9k]/.test(src[i + 1] || '') && !inClass) throw new Error('backreferences are not supported');
+      i++; prevQuant = false; continue;
+    }
+    if (inClass) { if (c === ']') inClass = false; continue; }
+    var quant = c === '*' || c === '+' || (c === '?' && src[i - 1] !== '(') || (c === '{' && /^\{\d+(,\d*)?\}/.test(src.slice(i)));
+    if (c === '[') inClass = true;
+    else if (c === '(') stack.push(false);
+    else if (c === ')') {
+      var inner = stack.pop();
+      var after = src.slice(i + 1);
+      if (inner && /^(?:[*+]|\{\d+,)/.test(after)) throw new Error('nested quantifiers are not supported');
+      if (inner && stack.length) stack[stack.length - 1] = true;
+      // The group as a whole becomes the quantified atom.
+      if (/^(?:[*+?]|\{\d+(,\d*)?\})/.test(after) && stack.length) stack[stack.length - 1] = true;
+    } else if (quant && !prevQuant && stack.length) stack[stack.length - 1] = true;
+    prevQuant = quant;
+  }
+  return new RegExp(src);
+}
+
 /* ---------------------------------------------------------------- handlers */
 
 var handlers = {
   /* ---- inventory ---- */
-  'tabs.list': async function () {
+  'tabs.list': async function (p) {
     var tabs = await call(B.tabs, 'query', {});
+    if (p && p.includeDiscarded === false) tabs = tabs.filter(function (t) { return !t.discarded; });
     return tabs.map(toTabInfo);
   },
   'tabs.query': async function (p) {
     var tabs = await call(B.tabs, 'query', {});
     var urlRe = null, titleRe = null;
     try {
-      // A pathological pattern would freeze the whole add-on, so keep them short.
-      if (String(p.urlPattern || '').length > 500 || String(p.titlePattern || '').length > 500) throw new Error('pattern longer than 500 characters');
-      if (p.urlPattern) urlRe = new RegExp(String(p.urlPattern));
-      if (p.titlePattern) titleRe = new RegExp(String(p.titlePattern));
+      urlRe = safeRegExp(p.urlPattern);
+      titleRe = safeRegExp(p.titlePattern);
     } catch (e) {
       throw be('INVALID_PARAMS', 'Bad regex in tabs.query: ' + e.message);
     }
     return tabs.filter(function (t) {
-      if (urlRe && !urlRe.test(t.url || '')) return false;
-      if (titleRe && !titleRe.test(t.title || '')) return false;
+      // Bounded input keeps even a slow pattern from freezing the add-on.
+      if (urlRe && !urlRe.test(String(t.url || '').slice(0, 2048))) return false;
+      if (titleRe && !titleRe.test(String(t.title || '').slice(0, 512))) return false;
       if (p.audible !== undefined && !!t.audible !== !!p.audible) return false;
       if (p.pinned !== undefined && !!t.pinned !== !!p.pinned) return false;
       if (p.active !== undefined && !!t.active !== !!p.active) return false;
@@ -481,6 +540,14 @@ var handlers = {
     if (p.active !== undefined) props.active = !!p.active;
     if (p.pinned !== undefined) props.pinned = !!p.pinned;
     var updated = tab;
+    if (props.url !== undefined && p.waitForLoad && sameDocument(tab.url, props.url)) {
+      // A #fragment change doesn't load anything, so there is nothing to wait for.
+      updated = await call(B.tabs, 'update', tab.id, props);
+      await focusWindow(props, updated);
+      var same = toTabInfo(await call(B.tabs, 'get', tab.id));
+      same.loadComplete = true;
+      return same;
+    }
     if (props.url !== undefined && p.waitForLoad) {
       var loaded = tabLoadWaiter(num(p.timeoutMs, 20000), ctx.signal, props.url);
       loaded.start(tab.id, false);
@@ -492,13 +559,12 @@ var handlers = {
       }
       var ok = await loaded.promise;
       var info = toTabInfo(await call(B.tabs, 'get', tab.id));
+      await focusWindow(props, info);
       info.loadComplete = ok;
       return info;
     }
     if (Object.keys(props).length) updated = await call(B.tabs, 'update', tab.id, props);
-    if (props.active && updated) {
-      try { await call(B.windows, 'update', updated.windowId, { focused: true }); } catch (e) {}
-    }
+    await focusWindow(props, updated);
     return toTabInfo(updated || tab);
   },
   'tab.close': async function (p) {
@@ -919,6 +985,7 @@ async function handleIncoming(msg) {
       if (port === from) send({ id: msg.id, ok: false, error: toBridgeError(e) });
     } finally {
       if (inflight.get(msg.id) === ac) inflight.delete(msg.id);
+      updateBadge(); // the busy dot goes when the last command does
     }
   }
 }

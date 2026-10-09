@@ -57,9 +57,9 @@ const config = (port) => ({ hostConfig: { port, bind: "127.0.0.1", token: TOKEN,
 const lastStatus = () => [...fromHost].reverse().find((m) => m.hostStatus)?.hostStatus;
 
 // ---- raw HTTP (fetch won't let us forge Host) ----
-function req(port, { method = "POST", path: p = "/mcp", headers = {}, body } = {}) {
+function req(port, { method = "POST", path: p = "/mcp", headers = {}, body, addr = "127.0.0.1" } = {}) {
   return new Promise((resolve, reject) => {
-    const r = http.request({ host: "127.0.0.1", port, method, path: p, headers: {
+    const r = http.request({ host: addr, port, method, path: p, headers: {
       "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer " + TOKEN, ...headers,
     } }, (res) => {
       let t = "";
@@ -121,6 +121,17 @@ r = await req(PORT, { headers: { host: "localhost:" + PORT, origin: "http://loca
 check("loopback Host/Origin allowed", r.status === 200, String(r.status));
 r = await req(PORT, { method: "GET", path: "/health", headers: { host: "evil.example" } });
 check("/health is guarded too", r.status === 403, String(r.status));
+const list = { jsonrpc: "2.0", id: 1, method: "tools/list" };
+r = await req(PORT, { headers: { host: "[::1]evil.example:" + PORT }, body: list });
+check("malformed Host authority -> 403", r.status === 403, String(r.status));
+r = await req(PORT, { headers: { host: "evil.example@127.0.0.1:" + PORT }, body: list });
+check("Host with userinfo -> 403", r.status === 403, String(r.status));
+r = await req(PORT, { headers: { origin: "http://evil@localhost:3000" }, body: list });
+check("Origin with userinfo -> 403", r.status === 403, String(r.status));
+r = await req(PORT, { headers: { origin: "moz-extension://localhost" }, body: list });
+check("non-http Origin -> 403", r.status === 403, String(r.status));
+r = await req(PORT, { headers: { host: "[::1]:" + PORT, origin: "http://[::1]:3000" }, body: list });
+check("bracketed IPv6 loopback Host/Origin allowed", r.status === 200, String(r.status));
 
 // Malformed bodies.
 r = await req(PORT, { headers: { authorization: "Bearer nope" }, body: "{not json" });
@@ -180,6 +191,28 @@ for (let t = 0; t < 8000; t += 100) { st = lastStatus(); if (st?.listening) brea
 check("helper takes the port once it's free", st?.listening && st.port === BUSY && !st.error, JSON.stringify(st && { listening: st.listening, error: st.error }));
 r = await call(BUSY, "tabs_list");
 check("and serves on it", /example\.com/.test(resultText(r)), resultText(r));
+
+// Another loopback address (Linux routes all of 127/8 to lo): its own Host must be accepted.
+if (process.platform === "linux") {
+  const ALT = BASE + 11;
+  post({ hostConfig: { port: ALT, bind: "127.0.0.2", token: TOKEN, confirmDestructive: true } });
+  for (let t = 0; t < 3000; t += 50) { st = lastStatus(); if (st?.port === ALT && st.listening) break; await sleep(50); }
+  r = await req(ALT, { addr: "127.0.0.2", headers: { host: "127.0.0.2:" + ALT }, body: list });
+  check("non-default loopback bind accepts its own Host", r.status === 200, String(r.status));
+  r = await req(ALT, { addr: "127.0.0.2", headers: { host: "evil.example:" + ALT }, body: list });
+  check("and still refuses foreign Hosts", r.status === 403, String(r.status));
+  post(config(BUSY));
+  for (let t = 0; t < 3000; t += 50) { st = lastStatus(); if (st?.port === BUSY && st.listening) break; await sleep(50); }
+}
+
+// Junk from the extension (wrong shapes) is ignored without breaking the stream.
+post({ hello: { extensionId: 5 } });
+post({ id: 1, ok: "yes" });
+post({ event: "tab.updated", data: null });
+post({ hostConfig: { port: "x", token: 7 } });
+await sleep(200);
+r = await call(BUSY, "tabs_list");
+check("malformed native messages are ignored", /example\.com/.test(resultText(r)), resultText(r));
 
 // Firefox closing the pipe ends the helper and frees the port.
 const exited = new Promise((res) => child.once("exit", () => res(true)));

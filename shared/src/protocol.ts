@@ -249,8 +249,19 @@ export interface HostExitMessage {
   hostExit: { reason: "updated" | "shutdown"; version?: string };
 }
 
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === "string";
+
 export function isHostConfig(m: unknown): m is HostConfigMessage {
-  return typeof m === "object" && m !== null && "hostConfig" in m;
+  if (!isObj(m) || !isObj(m.hostConfig)) return false;
+  const c = m.hostConfig;
+  return (
+    (c.token === undefined || isStr(c.token)) &&
+    (c.port === undefined || typeof c.port === "number") &&
+    (c.bind === undefined || isStr(c.bind)) &&
+    (c.confirmDestructive === undefined || typeof c.confirmDestructive === "boolean") &&
+    (c.allowWsl === undefined || typeof c.allowWsl === "boolean")
+  );
 }
 
 export const NATIVE_HOST_NAME = "webmcp_controller";
@@ -261,17 +272,22 @@ export const PROTOCOL = 1;
 export { VERSION } from "./version.js";
 
 export function isHello(m: unknown): m is HelloMessage {
-  return typeof m === "object" && m !== null && "hello" in m;
-}
-export function isResponse(m: unknown): m is BridgeResponse {
+  if (!isObj(m) || !isObj(m.hello)) return false;
+  const h = m.hello;
   return (
-    typeof m === "object" &&
-    m !== null &&
-    "id" in m &&
-    "ok" in m &&
-    !("method" in m)
+    isStr(h.extensionId) &&
+    isStr(h.version) &&
+    (h.protocol === undefined || (typeof h.protocol === "number" && Number.isInteger(h.protocol))) &&
+    (h.profile === undefined || isStr(h.profile)) &&
+    (h.firefoxVersion === undefined || isStr(h.firefoxVersion)) &&
+    (h.capabilities === undefined || (Array.isArray(h.capabilities) && h.capabilities.every(isStr)))
   );
 }
+export function isResponse(m: unknown): m is BridgeResponse {
+  if (!isObj(m) || "method" in m || !isStr(m.id) || typeof m.ok !== "boolean") return false;
+  if (m.ok) return true;
+  return m.error === undefined || (isObj(m.error) && (m.error.code === undefined || isStr(m.error.code)) && (m.error.message === undefined || isStr(m.error.message)));
+}
 export function isEvent(m: unknown): m is BridgeEvent {
-  return typeof m === "object" && m !== null && "event" in m;
+  return isObj(m) && isStr(m.event) && isObj(m.data);
 }

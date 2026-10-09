@@ -74,6 +74,7 @@ function renderSetup(container, platform, intro, installed) {
 function mcpUrl(st) {
   if (st && st.url) return st.url;
   var host = !st || st.bind === '0.0.0.0' || st.bind === '::' ? '127.0.0.1' : st.bind;
+  if (host.indexOf(':') >= 0) host = '[' + host + ']'; // IPv6 literal
   return 'http://' + host + ':' + ((st && st.port) || 8901) + '/mcp';
 }
 

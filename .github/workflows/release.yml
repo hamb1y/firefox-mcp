@@ -20,9 +20,16 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: npm ci
       - run: node scripts/set-version.mjs --check "${GITHUB_REF_NAME#v}"
+      # The same checks as CI: never publish what CI would reject.
       - run: npm run build
+      - run: npm run typecheck
+      - run: npx -y web-ext@8 lint -s extension
       - run: node test/e2e.mjs
+      - run: MISSING=1 node test/e2e.mjs
       - run: node test/host.mjs
+      - run: npx playwright install --with-deps firefox
+      - run: node test/content.mjs
+      - run: node test/options.mjs
       - run: npm run release
         env:
           GH_TOKEN: ${{ github.token }}
